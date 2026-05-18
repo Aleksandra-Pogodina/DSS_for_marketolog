@@ -358,60 +358,140 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
 
 
 def _kpi_zscore_heatmap(result: AnalysisResult) -> PlotlySpec | None:
-    """Цвет — отклонение от среднего в σ, в клетках — фактические значения."""
     m = result.metrics
     cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in m.columns and m[c].notna().any()]
     if len(cols) < 2:
         return None
 
     keep = [result.group_col] + cols
-    data = m[keep].copy().set_index(result.group_col).astype(float)
+    data = m[keep].copy().set_index(result.group_col)
+    data = data.astype(float)
+
     z = data.copy()
     for c in cols:
         col = data[c]
         mean = col.mean(skipna=True)
         std = col.std(skipna=True, ddof=0)
-        z[c] = (col - mean) / std if (std and not pd.isna(std) and std > 0) else 0.0
+        if std and not pd.isna(std) and std > 0:
+            z[c] = (col - mean) / std
+        else:
+            z[c] = 0.0
 
     abs_max = float(np.nanmax(np.abs(z.values))) if z.size else 1.0
     abs_max = max(abs_max, 0.5)
 
     labels_map = result.metric_labels
+    annotations = []
 
-    # Метки по y: если есть две размерности, склейка коротко
-    if result.channel_col and result.campaign_col:
-        info = m[[result.group_col, result.campaign_col, result.channel_col]].drop_duplicates(result.group_col)
-        info = info.set_index(result.group_col).loc[data.index]
-        y_labels = [f"{_truncate(c, 18)} · {_truncate(ch, 18)}"
-                    for c, ch in zip(info[result.campaign_col].astype(str),
-                                     info[result.channel_col].astype(str))]
+    if (
+            result.channel_col
+            and result.campaign_col
+            and {result.channel_col, result.campaign_col}.issubset(m.columns)
+    ):
+        info = (
+            m[[result.group_col, result.campaign_col, result.channel_col]]
+            .drop_duplicates(result.group_col)
+            .set_index(result.group_col)
+            .loc[data.index]
+        )
+
+        campaigns = info[result.campaign_col].astype(str).tolist()
+        channels = info[result.channel_col].astype(str).tolist()
+        y_labels = [_truncate(ch, 18) for ch in channels]
+
+        start = 0
+        current = campaigns[0]
+        for i, camp in enumerate(campaigns[1:], start=1):
+            if camp != current:
+                center = (start + i - 1) / 2
+                annotations.append(
+                    dict(
+                        x=-0.34,
+                        y=center,
+                        xref="paper",
+                        yref="y",
+                        text=_truncate(current, 18),
+                        showarrow=False,
+                        xanchor="right",
+                        yanchor="middle",
+                        align="right",
+                        font=dict(size=11),
+                    )
+                )
+                start = i
+                current = camp
+
+        center = (start + len(campaigns) - 1) / 2
+        annotations.append(
+            dict(
+                x=-0.34,
+                y=center,
+                xref="paper",
+                yref="y",
+                text=_truncate(current, 18),
+                showarrow=False,
+                xanchor="right",
+                yanchor="middle",
+                align="right",
+                font=dict(size=11),
+            )
+        )
     else:
         y_labels = [_truncate(v, 32) for v in data.index.astype(str)]
 
-    fig = go.Figure(data=go.Heatmap(
-        z=z.values,
-        x=[labels_map.get(c, c) for c in cols],
-        y=y_labels,
-        text=data.round(2).values,
-        texttemplate="%{text}",
-        colorscale="RdYlGn",
-        zmid=0, zmin=-abs_max, zmax=abs_max,
-        colorbar=dict(title="Отклонение от среднего, σ"),
-        hovertemplate="<b>%{y}</b><br>%{x}: %{text}<br>отклонение: %{z:.2f}σ<extra></extra>",
-    ))
-    fig.update_layout(
-        **{**_BASE_LAYOUT, "legend": dict(visible=False)},
-        xaxis_title="KPI",
-        yaxis_title="",
-        autosize=True,
+    custom_text = data.round(2).astype(str).values
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z.values,
+            x=[labels_map.get(c, c) for c in cols],
+            y=list(range(len(y_labels))),
+            customdata=custom_text,
+            colorscale="RdYlGn",
+            zmid=0,
+            zmin=-abs_max,
+            zmax=abs_max,
+            colorbar=dict(
+                title=dict(
+                    text="Отклонение от среднего, σ",
+                    side="right"
+                ),
+                thickness=18,
+                len=0.95,
+                y=0.5,
+                yanchor="middle",
+            ),
+            hovertemplate=(
+                "Сегмент: %{y}<br>"
+                "Метрика: %{x}<br>"
+                "Значение: %{customdata}<br>"
+                "Отклонение: %{z:.2f}σ<extra></extra>"
+            ),
+        )
     )
+
+    layout = dict(_BASE_LAYOUT)
+    layout["margin"] = dict(l=180, r=80, t=70, b=90)
+    layout["showlegend"] = False
+    layout["annotations"] = annotations
+    layout["xaxis"] = dict(title="KPI", tickangle=20)
+    layout["yaxis"] = dict(
+        title=None,
+        tickmode="array",
+        tickvals=list(range(len(y_labels))),
+        ticktext=y_labels,
+        autorange="reversed",
+        automargin=True,
+    )
+
+    fig.update_layout(**layout)
+
     return PlotlySpec(
         title="Тепловая карта KPI",
-        html=_to_html(fig, "Тепловая карта KPI: цвет — отклонение от среднего, в клетках — реальные значения"),
+        html=_to_html(fig, "Тепловая карта KPI"),
         description=(
-            "Цвет ячейки показывает, насколько сегмент выше (зелёный) или ниже (красный) "
-            "среднего по этой метрике, в стандартных отклонениях. Текст — фактические "
-            "значения метрик. Шкала симметрична относительно нуля."
+            "Цвет показывает, насколько сегмент выше или ниже среднего по KPI; "
+            "подробные фактические значения видны при наведении."
         ),
     )
 

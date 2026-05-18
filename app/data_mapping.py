@@ -131,14 +131,14 @@ def auto_guess_mapping(columns) -> dict:
     """
 
     hints = {
-        "channels": ["channel", "канал", "источник", "source"],
+        "channels": ["channel", "канал", "источник", "source", "placement"],
         "campaigns": ["campaign", "кампан"],
         "displays": ["impression", "display", "показ", "shows"],
         "clicks": ["click", "клик"],
         "conversions": ["conversion", "конверс", "order", "заказ"],
         "total_cost": ["total_cost", "totalcost", "общая", "spend", "затрат", "расход"],
-        #"placement_cost": ["placement", "размещен"],
-        "cpc": ["cpc", "cost_per_click", "цена за клик", "стоимость за клик"],
+        "placement_cost": ["placement", "размещен", "cost"],
+        "cpc": ["cpc", "cost_per_click", "цена за клик", "стоимость за клик", "revenue"],
         #"age": ["age", "возраст"],
         "city": ["city", "город", "регион", "region"],
         "month": ["month", "месяц", "date", "дата"],

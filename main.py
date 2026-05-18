@@ -11,6 +11,7 @@ from app.theme import apply_theme
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Маркетинговая аналитика")
+    print("RUNNING TEST-XYZ")
     apply_theme(app)
     window = MainWindow()
     window.showMaximized()
