@@ -237,47 +237,123 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
     m = result.metrics
     if value_col not in m.columns:
         return None
-    data = m.dropna(subset=[value_col]).sort_values(value_col, ascending=True)
+
+    data = m.dropna(subset=[value_col]).copy()
     if data.empty:
         return None
 
-    labels = result.metric_labels
-    pretty = labels.get(value_col, value_col)
-    title = f"{pretty} — ранжирование"
-    is_percent = value_col in ("CTR", "CVR", "cost_share", "conv_share")
-    hover_unit = "%" if is_percent else ""
+    pretty_name = result.metric_labels.get(value_col, value_col)
 
-    def _fmt(v: float) -> str:
-        return f"{v:.2f}%" if is_percent else f"{v:,.2f}"
-
-    # Метки по y: если есть и кампания и канал — две строки, иначе обычная подпись
-    if result.channel_col and result.campaign_col and {result.channel_col, result.campaign_col}.issubset(data.columns):
-        y_labels = [f"{_truncate(camp, 22)}<br><sub>{_truncate(chan, 22)}</sub>"
-                    for camp, chan in zip(data[result.campaign_col].astype(str),
-                                          data[result.channel_col].astype(str))]
-    else:
-        y_labels = [_truncate(v, 32) for v in data[result.group_col].astype(str)]
-
-    fig = go.Figure(go.Bar(
-        y=y_labels,
-        x=data[value_col].astype(float),
-        orientation="h",
-        marker_color=color,
-        text=[_fmt(v) for v in data[value_col].astype(float)],
-        textposition="outside",
-        cliponaxis=False,
-        hovertemplate="<b>%{y}</b><br>" + pretty + ": %{x:,.2f}" + hover_unit + "<extra></extra>",
-    ))
-    fig.update_layout(
-        **{**_BASE_LAYOUT, "legend": dict(visible=False)},
-        xaxis_title=pretty,
-        yaxis_title="",
-        autosize=True,
+    has_campaign_and_channel = (
+        bool(result.channel_col)
+        and bool(result.campaign_col)
+        and {result.channel_col, result.campaign_col}.issubset(data.columns)
     )
+
+    if has_campaign_and_channel:
+        data = data.sort_values(
+            [result.campaign_col, result.channel_col],
+            ascending=[True, True]
+        ).copy()
+
+        x_labels = data[result.channel_col].astype(str).tolist()
+        campaigns = data[result.campaign_col].astype(str).tolist()
+
+        annotations = []
+        shapes = []
+
+        start = 0
+        current = campaigns[0]
+        for i, camp in enumerate(campaigns[1:], start=1):
+            if camp != current:
+                annotations.append(dict(
+                    x=(start + i - 1) / 2,
+                    y=-0.23,
+                    xref="x",
+                    yref="paper",
+                    text=current,
+                    showarrow=False,
+                    xanchor="center",
+                    yanchor="top",
+                    font=dict(size=11)
+                ))
+                shapes.append(dict(
+                    type="line",
+                    xref="x",
+                    yref="paper",
+                    x0=i - 0.5,
+                    x1=i - 0.5,
+                    y0=0,
+                    y1=1,
+                    line=dict(color="rgba(120,120,120,0.45)", width=1)
+                ))
+                start = i
+                current = camp
+
+        annotations.append(dict(
+            x=(start + len(campaigns) - 1) / 2,
+            y=-0.23,
+            xref="x",
+            yref="paper",
+            text=current,
+            showarrow=False,
+            xanchor="center",
+            yanchor="top",
+            font=dict(size=11)
+        ))
+
+        bottom_margin = 145
+        customdata = np.column_stack([
+            data[result.campaign_col].astype(str).to_numpy(),
+            data[result.channel_col].astype(str).to_numpy()
+        ])
+        hovertemplate = (
+            "Кампания: %{customdata[0]}<br>"
+            "Канал: %{customdata[1]}<br>"
+            f"{pretty_name}: %{{y:.2f}}<extra></extra>"
+        )
+
+    else:
+        data = data.sort_values(value_col, ascending=False).copy()
+        x_labels = data[result.group_col].astype(str).tolist()
+        annotations = []
+        shapes = []
+        bottom_margin = 100
+        customdata = np.column_stack([data[result.group_col].astype(str).to_numpy()])
+        hovertemplate = (
+            "Сегмент: %{customdata[0]}<br>"
+            f"{pretty_name}: %{{y:.2f}}<extra></extra>"
+        )
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=list(range(len(data))),
+        y=data[value_col].astype(float).fillna(0),
+        marker_color=color,
+        customdata=customdata,
+        hovertemplate=hovertemplate
+    ))
+
+    layout = dict(_BASE_LAYOUT)
+    layout["margin"] = dict(l=60, r=30, t=70, b=bottom_margin)
+    layout["title"] = dict(text=f"{pretty_name} — ранжирование", x=0.02, xanchor="left")
+    layout["showlegend"] = False
+    layout["annotations"] = annotations
+    layout["shapes"] = shapes
+    layout["xaxis"] = dict(
+        tickmode="array",
+        tickvals=list(range(len(data))),
+        ticktext=x_labels,
+        tickangle=0,
+    )
+    layout["yaxis"] = dict(title=pretty_name)
+
+    fig.update_layout(**layout)
+
     return PlotlySpec(
-        title=title,
-        html=_to_html(fig, title),
-        description=f"Сегменты упорядочены по «{pretty}».",
+        title=f"{pretty_name} — ранжирование",
+        html=_to_html(fig, f"{pretty_name} — ранжирование"),
+        description=f"Сегменты упорядочены по показателю «{pretty_name}».",
     )
 
 
