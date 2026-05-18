@@ -1,0 +1,25 @@
+channel,campaign,impressions,clicks,conversions,total_cost,placement_cost,cpc,age,city,month,gender,product_category
+Google Ads,Brand_Search,125000,4800,210,38400,32000,8.0,28,Москва,January,Female,Electronics
+Google Ads,Brand_Search,118000,4500,195,36500,30500,8.1,32,Москва,February,Male,Electronics
+Google Ads,Brand_Search,141000,5400,225,43200,36000,8.0,30,Санкт-Петербург,March,Female,Home
+Yandex Direct,Brand_Search,98000,3700,160,28000,23000,7.6,29,Москва,January,Male,Electronics
+Yandex Direct,Brand_Search,102000,3900,170,29500,24200,7.6,33,Москва,February,Female,Fashion
+Yandex Direct,Brand_Search,110000,4100,180,32000,26500,7.8,31,Екатеринбург,March,Male,Home
+Facebook,Awareness,520000,9800,140,42000,40000,4.3,24,Москва,January,Female,Fashion
+Facebook,Awareness,610000,11200,165,49500,46500,4.4,26,Москва,February,Female,Fashion
+Facebook,Awareness,580000,10600,150,46000,43200,4.3,27,Казань,March,Male,Electronics
+Instagram,Awareness,430000,12500,310,38000,34000,3.0,22,Москва,January,Female,Fashion
+Instagram,Awareness,470000,13800,340,41500,37200,3.0,23,Санкт-Петербург,February,Female,Fashion
+Instagram,Awareness,510000,15200,380,44800,40000,2.9,25,Москва,March,Male,Fashion
+VK Ads,Retargeting,210000,5200,260,21000,18500,4.0,35,Москва,January,Male,Home
+VK Ads,Retargeting,225000,5600,275,22500,19800,4.0,37,Москва,February,Female,Home
+VK Ads,Retargeting,240000,6100,290,24000,21000,3.9,36,Новосибирск,March,Male,Home
+TikTok,Awareness,890000,18500,180,68000,62000,3.7,21,Москва,January,Female,Fashion
+TikTok,Awareness,920000,19200,175,71500,65000,3.7,22,Москва,February,Male,Fashion
+TikTok,Awareness,950000,20100,195,74000,67500,3.7,23,Санкт-Петербург,March,Female,Electronics
+Email,Retention,45000,2200,420,5500,5000,2.5,42,Москва,January,Female,Home
+Email,Retention,48000,2400,460,6000,5500,2.5,44,Москва,February,Male,Electronics
+Email,Retention,46000,2300,440,5800,5300,2.5,43,Екатеринбург,March,Female,Home
+Programmatic,Awareness,1200000,8400,90,62000,58000,7.4,38,Москва,January,Male,Electronics
+Programmatic,Awareness,1150000,8000,85,59500,55500,7.4,40,Санкт-Петербург,February,Female,Electronics
+Programmatic,Awareness,1280000,8900,95,66000,61500,7.4,39,Москва,March,Male,Home
