@@ -112,8 +112,8 @@ def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
 
     if has_campaign_and_channel:
         data = data.sort_values(
-            [result.campaign_col, value_col],
-            ascending=[True, False]
+            [result.campaign_col, result.channel_col],
+            ascending=[True, True]
         ).copy()
         x_labels = [_truncate(v, 14) for v in data[result.channel_col].astype(str)]
     else:
@@ -149,6 +149,8 @@ def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
         )
 
     if has_campaign_and_channel:
+        campaigns = data[result.campaign_col].astype(str).tolist()
+
         for center, camp_label in _campaign_group_annotations(result, data):
             ax.text(
                 center,
@@ -160,6 +162,16 @@ def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
                 fontsize=9,
                 fontweight="bold",
             )
+
+        for i in range(1, len(campaigns)):
+            if campaigns[i] != campaigns[i - 1]:
+                ax.axvline(
+                    x=i - 0.5,
+                    color="gray",
+                    linewidth=1,
+                    alpha=0.45,
+                    zorder=0,
+                )
 
         fig.subplots_adjust(bottom=0.28)
 

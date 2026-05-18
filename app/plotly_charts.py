@@ -460,11 +460,11 @@ def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
 def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     """Собирает все доступные Plotly-графики; порядок от обзорных к детальным."""
     specs: list[PlotlySpec] = []
+    labels = result.metric_labels
 
-    for builder in (_funnel_combo, _kpi_combo, _shares, _kpi_zscore_heatmap, _extra_category_chart):
-        spec = builder(result)
-        if spec:
-            specs.append(spec)
+    funnel = _funnel_combo(result)
+    if funnel:
+        specs.append(funnel)
 
     combined_funnel_metrics = {
         c for c in ("displays", "clicks", "conversions")
@@ -472,27 +472,22 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     }
     has_combined_funnel = len(combined_funnel_metrics) >= 2
 
-    ranking_palette = [
-        ("conversions", "#117733"),
-        ("clicks", "#4477AA"),
-        ("displays", "#88CCEE"),
-        ("total_cost", "#CC6677"),
-        ("CTR", "#882255"),
-        ("CVR", "#AA4499"),
-        ("CPA", "#999933"),
-        ("CPC", "#DDCC77"),
-    ]
-    for col, color in ranking_palette:
+    for col, color in (
+            ("conversions", "#117733"),
+            ("clicks", "#4477AA"),
+            ("displays", "#88CCEE"),
+            ("total_cost", "#CC6677"),
+            ("CTR", "#882255"),
+            ("CVR", "#AA4499"),
+            ("CPA", "#999933"),
+            ("CPC", "#DDCC77"),
+    ):
         if has_combined_funnel and col in {"displays", "clicks", "conversions"}:
             continue
 
-        spec = _ranking_bar(result, col, color)
-        if spec:
-            specs.append(spec)
-
-    for builder in (_correlation, _age_chart):
-        spec = builder(result)
-        if spec:
-            specs.append(spec)
+        if col in result.metrics.columns:
+            spec = _ranking_bar(result, col, color)
+            if spec:
+                specs.append(spec)
 
     return specs

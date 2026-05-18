@@ -492,7 +492,10 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         if sort_col in metrics.columns and metrics[sort_col].notna().any():
             # При двух размерностях группируем по кампании, чтобы каналы кампании шли подряд
             if channel_col and campaign_col:
-                metrics = metrics.sort_values([campaign_col, sort_col], ascending=[True, False]).reset_index(drop=True)
+                metrics = metrics.sort_values(
+                    [campaign_col, channel_col],
+                    ascending=[True, True]
+                ).reset_index(drop=True)
             else:
                 metrics = metrics.sort_values(sort_col, ascending=False).reset_index(drop=True)
             break
