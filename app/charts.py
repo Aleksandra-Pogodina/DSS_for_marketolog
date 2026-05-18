@@ -257,7 +257,7 @@ def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -
     sns.heatmap(
         z, annot=data.round(2), fmt=".2f",
         cmap="RdYlGn", center=0, vmin=-abs_max, vmax=abs_max,
-        cbar_kws={"label": "Отклонение от среднего, σ"},
+        cbar_kws={"label": "", "shrink": 0.95},
         ax=ax, linewidths=0.5, linecolor="white",
     )
     ax.set_title(title)
@@ -267,12 +267,47 @@ def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -
     if result.channel_col and result.campaign_col:
         info = m[[result.group_col, result.campaign_col, result.channel_col]].drop_duplicates(result.group_col)
         info = info.set_index(result.group_col).loc[data.index]
-        y_labels = [f"{_truncate(c, 14)} · {_truncate(ch, 14)}"
-                    for c, ch in zip(info[result.campaign_col].astype(str),
-                                     info[result.channel_col].astype(str))]
+
+        campaigns = info[result.campaign_col].astype(str).tolist()
+        channels = info[result.channel_col].astype(str).tolist()
+        y_labels = [_truncate(ch, 14) for ch in channels]
     else:
+        campaigns = []
         y_labels = [_truncate(v) for v in data.index.astype(str)]
+
     ax.set_yticklabels(y_labels, rotation=0)
+
+    if campaigns:
+        start = 0
+        current = campaigns[0]
+
+        for i, camp in enumerate(campaigns[1:], start=1):
+            if camp != current:
+                center = (start + i - 1) / 2 + 0.5
+                ax.text(
+                    -0.55,
+                    center,
+                    _truncate(current, 14),
+                    transform=ax.get_yaxis_transform(),
+                    ha="right",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                )
+                start = i
+                current = camp
+
+        center = (start + len(campaigns) - 1) / 2 + 0.5
+        ax.text(
+            -0.55,
+            center,
+            _truncate(current, 14),
+            transform=ax.get_yaxis_transform(),
+            ha="right",
+            va="center",
+            fontsize=9,
+            fontweight="bold",
+        )
 
     path = _new_path("heatmap", tmpdir)
     _save(fig, path)
@@ -294,6 +329,8 @@ def _correlation_heatmap(metrics: pd.DataFrame, labels: dict, tmpdir: str) -> Ch
     fig, ax = plt.subplots(figsize=(0.7 * len(corr) + 3, 0.7 * len(corr) + 2))
     sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0,
                 vmin=-1, vmax=1, ax=ax, linewidths=0.5, linecolor="white")
+    cbar = ax.collections[0].colorbar
+    cbar.set_label("Отклонение от среднего, σ", rotation=270, labelpad=18)
     display_labels = [labels.get(c, c) for c in corr.columns]
     ax.set_xticklabels(display_labels, rotation=30, ha="right")
     ax.set_yticklabels(display_labels, rotation=0)

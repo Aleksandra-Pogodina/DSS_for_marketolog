@@ -686,6 +686,118 @@ def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
         ),
     )
 
+def _kpi_heatmap_grouped(result: AnalysisResult) -> PlotlySpec | None:
+    m = result.metrics
+    cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in m.columns and m[c].notna().any()]
+    if len(cols) < 2:
+        return None
+
+    data = m[[result.group_col] + cols].copy().set_index(result.group_col).astype(float)
+
+    z = data.copy()
+    for c in cols:
+        col = data[c]
+        mean = col.mean(skipna=True)
+        std = col.std(skipna=True, ddof=0)
+        if std and not pd.isna(std) and std > 0:
+            z[c] = (col - mean) / std
+        else:
+            z[c] = 0.0
+
+    abs_max = float(np.nanmax(np.abs(z.values))) if z.size else 1.0
+    abs_max = max(abs_max, 0.5)
+
+    labels_map = result.metric_labels
+    y_vals = list(range(len(data)))
+
+    if (
+        result.channel_col
+        and result.campaign_col
+        and {result.channel_col, result.campaign_col}.issubset(m.columns)
+    ):
+        info = (
+            m[[result.group_col, result.campaign_col, result.channel_col]]
+            .drop_duplicates(result.group_col)
+            .set_index(result.group_col)
+            .loc[data.index]
+        )
+
+        campaigns = info[result.campaign_col].astype(str).tolist()
+        channels = info[result.channel_col].astype(str).tolist()
+
+        y_labels = []
+        prev_campaign = None
+        for camp, ch in zip(campaigns, channels):
+            camp_txt = _truncate(camp, 18)
+            ch_txt = _truncate(ch, 18)
+            if camp != prev_campaign:
+                y_labels.append(f"<b>{camp_txt}</b><br>{ch_txt}")
+            else:
+                y_labels.append(f"<br>{ch_txt}")
+            prev_campaign = camp
+    else:
+        y_labels = [_truncate(v, 32) for v in data.index.astype(str)]
+
+    text_values = data[cols].round(2).astype(str).values
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z[cols].values,
+            x=[labels_map.get(c, c) for c in cols],
+            y=y_vals,
+            text=text_values,
+            texttemplate="%{text}",
+            textfont=dict(size=11),
+            customdata=text_values,
+            colorscale="RdYlGn",
+            zmid=0,
+            zmin=-abs_max,
+            zmax=abs_max,
+            colorbar=dict(
+                title=dict(
+                    text="Отклонение от среднего, σ",
+                    side="right",
+                ),
+                thickness=18,
+                len=0.98,
+                y=0.5,
+                yanchor="middle",
+            ),
+            hovertemplate=(
+                "Строка: %{y}<br>"
+                "Метрика: %{x}<br>"
+                "Значение: %{customdata}<br>"
+                "Отклонение: %{z:.2f}σ<extra></extra>"
+            ),
+        )
+    )
+
+    layout = dict(_BASE_LAYOUT)
+    layout["margin"] = dict(l=70, r=50, t=50, b=70)
+    layout["showlegend"] = False
+    layout["xaxis"] = dict(title="KPI", tickangle=20)
+    layout["yaxis"] = dict(
+        title=None,
+        tickmode="array",
+        tickvals=y_vals,
+        ticktext=y_labels,
+        autorange="reversed",
+        automargin=True,
+        tickfont=dict(size=11),
+    )
+    layout["height"] = max(315, 30 * len(y_vals)) #layout["height"] = max(420, 38 * len(y_vals))
+
+    fig.update_layout(**layout)
+
+    return PlotlySpec(
+        title="Тепловая карта KPI",
+        html=_to_html(fig, "Тепловая карта KPI"),
+        description=(
+            "Цвет показывает отклонение KPI от среднего, строки сгруппированы по кампаниям, "
+            "внутри группы показаны каналы, а в ячейках отображаются фактические значения."
+        ),
+    )
+
 # ---------- основной build --------------------------------------------------
 
 def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
@@ -697,7 +809,7 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     if funnel:
         specs.append(funnel)
 
-    hm = _heatmap_kpi(result)
+    hm = _kpi_heatmap_grouped(result)
     if hm:
         specs.append(hm)
 
