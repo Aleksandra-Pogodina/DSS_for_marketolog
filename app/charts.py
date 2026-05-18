@@ -94,8 +94,14 @@ def _campaign_group_annotations(result: AnalysisResult, df: pd.DataFrame) -> lis
     return [((start + end) / 2, _truncate(camp, 18)) for start, end, camp in groups]
 
 
-def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
-               tmpdir: str, color: str = "steelblue") -> Chart | None:
+def _bar_chart(
+    result: AnalysisResult,
+    value_col: str,
+    title: str,
+    ylabel: str,
+    tmpdir: str,
+    color: str = "steelblue",
+) -> Chart | None:
     m = result.metrics
     if value_col not in m.columns:
         return None
@@ -105,8 +111,8 @@ def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
         return None
 
     has_campaign_and_channel = (
-        result.channel_col
-        and result.campaign_col
+        bool(result.channel_col)
+        and bool(result.campaign_col)
         and {result.channel_col, result.campaign_col}.issubset(data.columns)
     )
 
@@ -180,9 +186,8 @@ def _bar_chart(result: AnalysisResult, value_col: str, title: str, ylabel: str,
     return Chart(
         title=title,
         path=path,
-        description=f"Сегменты упорядочены по «{ylabel}»."
+        description=f"Сегменты упорядочены по «{ylabel}».",
     )
-
 
 def _funnel_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     """Показы / клики / конверсии — только из реально доступных."""
