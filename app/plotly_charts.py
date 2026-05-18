@@ -531,6 +531,81 @@ def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
     return PlotlySpec(title=title, html=_to_html(fig, title), description=desc)
 
 
+def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
+    m = result.metrics
+    cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in m.columns and m[c].notna().any()]
+    if len(cols) < 2:
+        return None
+
+    data = m[[result.group_col] + cols].copy().set_index(result.group_col)
+
+    z = data.astype(float).copy()
+    for c in cols:
+        col = z[c]
+        mean = col.mean(skipna=True)
+        std = col.std(skipna=True, ddof=0)
+        if std and not pd.isna(std) and std > 0:
+            z[c] = (col - mean) / std
+        else:
+            z[c] = 0.0
+
+    display_cols = [result.metric_labels.get(c, c) for c in cols]
+
+    if result.channel_col and result.campaign_col and {result.channel_col, result.campaign_col}.issubset(m.columns):
+        info = (
+            m[[result.group_col, result.campaign_col, result.channel_col]]
+            .drop_duplicates(result.group_col)
+            .set_index(result.group_col)
+            .loc[data.index]
+        )
+        y_labels = [
+            f"{str(camp)} · {str(chan)}"
+            for camp, chan in zip(
+                info[result.campaign_col].astype(str),
+                info[result.channel_col].astype(str)
+            )
+        ]
+    else:
+        y_labels = [str(v) for v in data.index]
+
+    text_vals = data.round(2).values
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z[cols].values,
+            x=display_cols,
+            y=y_labels,
+            text=text_vals,
+            texttemplate="%{text}",
+            colorscale="RdYlGn",
+            zmid=0,
+            colorbar=dict(title="Отклонение от среднего, σ"),
+            hovertemplate=(
+                "Сегмент: %{y}<br>"
+                "Метрика: %{x}<br>"
+                "Значение: %{text}<br>"
+                "Отклонение: %{z:.2f}σ<extra></extra>"
+            ),
+        )
+    )
+
+    layout = dict(_BASE_LAYOUT)
+    layout["margin"] = dict(l=90, r=30, t=70, b=90)
+    layout["xaxis"] = dict(tickangle=25)
+    layout["yaxis"] = dict(automargin=True)
+    layout["title"] = dict(text="Тепловая карта KPI", x=0.02, xanchor="left")
+
+    fig.update_layout(**layout)
+
+    return PlotlySpec(
+        title="Тепловая карта KPI",
+        html=_to_html(fig, "Тепловая карта KPI"),
+        description=(
+            "Цвет показывает, насколько сегмент выше или ниже среднего по KPI; "
+            "в ячейках показаны фактические значения."
+        ),
+    )
+
 # ---------- основной build --------------------------------------------------
 
 def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
@@ -541,6 +616,10 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     funnel = _funnel_combo(result)
     if funnel:
         specs.append(funnel)
+
+    hm = _heatmap_kpi(result)
+    if hm:
+        specs.append(hm)
 
     combined_funnel_metrics = {
         c for c in ("displays", "clicks", "conversions")
@@ -567,3 +646,82 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
                 specs.append(spec)
 
     return specs
+
+def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
+    m = result.metrics
+    cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in m.columns and m[c].notna().any()]
+    if len(cols) < 2:
+        return None
+
+    data = m[[result.group_col] + cols].copy().set_index(result.group_col)
+
+    z = data.astype(float).copy()
+    for c in cols:
+        col = z[c]
+        mean = col.mean(skipna=True)
+        std = col.std(skipna=True, ddof=0)
+        if std and not pd.isna(std) and std > 0:
+            z[c] = (col - mean) / std
+        else:
+            z[c] = 0.0
+
+    abs_max = float(np.nanmax(np.abs(z.values))) if z.size else 1.0
+    abs_max = max(abs_max, 0.5)
+
+    display_cols = [result.metric_labels.get(c, c) for c in cols]
+
+    if result.channel_col and result.campaign_col and {result.channel_col, result.campaign_col}.issubset(m.columns):
+        info = (
+            m[[result.group_col, result.campaign_col, result.channel_col]]
+            .drop_duplicates(result.group_col)
+            .set_index(result.group_col)
+            .loc[data.index]
+        )
+        y_labels = [
+            f"{str(camp)} · {str(chan)}"
+            for camp, chan in zip(
+                info[result.campaign_col].astype(str),
+                info[result.channel_col].astype(str)
+            )
+        ]
+    else:
+        y_labels = [str(v) for v in data.index]
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z[cols].values,
+            x=display_cols,
+            y=y_labels,
+            text=data.round(2).values,
+            texttemplate="%{text}",
+            colorscale="RdYlGn",
+            zmid=0,
+            zmin=-abs_max,
+            zmax=abs_max,
+            colorbar=dict(title="Отклонение от среднего, σ"),
+            hovertemplate=(
+                "Сегмент: %{y}<br>"
+                "Метрика: %{x}<br>"
+                "Значение: %{text}<br>"
+                "Отклонение: %{z:.2f}σ<extra></extra>"
+            ),
+        )
+    )
+
+    layout = dict(_BASE_LAYOUT)
+    layout["margin"] = dict(l=90, r=30, t=70, b=90)
+    layout["title"] = dict(text="Тепловая карта KPI", x=0.02, xanchor="left")
+    layout["xaxis"] = dict(title="KPI", tickangle=25)
+    layout["yaxis"] = dict(title=None, automargin=True)
+    layout["showlegend"] = False
+
+    fig.update_layout(**layout)
+
+    return PlotlySpec(
+        title="Тепловая карта KPI",
+        html=_to_html(fig, "Тепловая карта KPI"),
+        description=(
+            "Цвет показывает, насколько сегмент выше или ниже среднего по KPI; "
+            "в ячейках показаны фактические значения."
+        ),
+    )
