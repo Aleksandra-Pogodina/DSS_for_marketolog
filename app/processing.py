@@ -293,10 +293,14 @@ def _build_month_table(
         return None
 
     group_fields = ["__month_label__", group_col]
+
     if campaign_col and campaign_col in work.columns and campaign_col != group_col:
         group_fields.append(campaign_col)
+
     if channel_col and channel_col in work.columns and channel_col != group_col:
         group_fields.append(channel_col)
+
+    group_fields = list(dict.fromkeys(group_fields))
 
     grouped = (
         work.groupby(group_fields, dropna=True)
@@ -617,6 +621,8 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         campaign_col=campaign_col,
     )
     extra_summary, extra_metric = _build_extra_summary(work, mapping, extra_col, channel_col)
+
+    month_table = _build_month_table(work, mapping, group_col, channel_col, campaign_col)
 
     return AnalysisResult(
         mapping=mapping,

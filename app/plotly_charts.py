@@ -139,6 +139,320 @@ def _month_series_name(result: AnalysisResult, row: pd.Series) -> str:
         return str(row.get(result.campaign_col, "")).strip()
     return str(row.get(result.group_col, "")).strip()
 
+def _month_top_groups(
+    result: AnalysisResult,
+    month_df: pd.DataFrame,
+    metric_cols: list[str],
+    top_n: int = 5,
+) -> list[str]:
+    if month_df is None or month_df.empty or result.group_col not in month_df.columns:
+        return []
+
+    month_df = month_df.copy()
+    month_df[result.group_col] = month_df[result.group_col].astype(str)
+
+    groups_all = month_df[result.group_col].dropna().drop_duplicates().tolist()
+
+    if result.channel_col and not result.campaign_col:
+        return groups_all
+
+    if result.campaign_col and not result.channel_col:
+        return groups_all
+
+    if result.channel_col and result.campaign_col:
+        present = [c for c in metric_cols if c in month_df.columns]
+        if not present:
+            return groups_all[:top_n]
+
+        score_series = pd.Series(0.0, index=month_df[result.group_col].drop_duplicates())
+        score_series.index = score_series.index.astype(str)
+
+        for col in present:
+            s = (
+                month_df.groupby(result.group_col, dropna=True)[col]
+                .sum(min_count=1)
+                .fillna(0)
+                .astype(float)
+            )
+            s.index = s.index.astype(str)
+            score_series = score_series.add(s, fill_value=0)
+
+        return score_series.sort_values(ascending=False).head(top_n).index.tolist()
+
+    return groups_all
+
+def _month_single_metric_chart(
+    result: AnalysisResult,
+    metric: str,
+    color: str,
+) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return None
+    if result.group_col not in month_df.columns or metric not in month_df.columns:
+        return None
+
+    data = month_df.copy()
+    data[result.group_col] = data[result.group_col].astype(str)
+
+    label = result.metric_labels.get(metric, metric)
+    fig = go.Figure()
+
+    for group_value, part in data.groupby(result.group_col, dropna=True):
+        part = part.copy()
+        part["Месяц"] = part["Месяц"].astype(str)
+
+        row0 = part.iloc[0]
+        series_name = _month_series_name(result, row0)
+
+        if metric in ("CTR", "CVR"):
+            hover_value = "%{y:.2f}%"
+            y_title = label
+        elif metric in ("CPC", "CPA"):
+            hover_value = "%{y:,.2f}"
+            y_title = label
+        else:
+            hover_value = "%{y:,.0f}"
+            y_title = label
+
+        fig.add_trace(go.Scatter(
+            x=part["Месяц"].tolist(),
+            y=pd.to_numeric(part[metric], errors="coerce").fillna(0).tolist(),
+            name=series_name,
+            mode="lines+markers",
+            line=dict(color=color, width=2.5),
+            marker=dict(size=7),
+            hovertemplate=(
+                f"<b>%{{x}}</b><br>"
+                f"{label}: {hover_value}<br>"
+                f"Сегмент: {series_name}"
+                f"<extra></extra>"
+            ),
+        ))
+
+    title = f"{label} по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(title=y_title, rangemode="tozero"),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description=f"Помесячная динамика метрики «{label}».",
+    )
+
+def _build_monthly_split_specs(result: AnalysisResult) -> list[PlotlySpec]:
+    specs: list[PlotlySpec] = []
+
+    metric_colors = {
+        "displays": "#88CCEE",
+        "clicks": "#4477AA",
+        "conversions": "#117733",
+        "CTR": "#882255",
+        "CVR": "#AA4499",
+        "CPC": "#DDCC77",
+        "CPA": "#999933",
+    }
+
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return specs
+
+    ordered_metrics = ["displays", "clicks", "conversions", "CTR", "CVR", "CPC", "CPA"]
+    for metric in ordered_metrics:
+        if metric in month_df.columns:
+            spec = _month_single_metric_chart(result, metric, metric_colors[metric])
+            if spec is not None:
+                specs.append(spec)
+
+    return specs
+
+def month_volume_combo_result(result: AnalysisResult) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return None
+
+    if result.channel_col and result.campaign_col:
+        metric_cols = [c for c in ("conversions", "clicks", "displays") if c in month_df.columns][:1]
+    else:
+        metric_cols = [c for c in ("displays", "clicks", "conversions") if c in month_df.columns]
+
+    if not metric_cols or result.group_col not in month_df.columns:
+        return None
+
+    top_groups = _month_top_groups(result, month_df, metric_cols, top_n=5)
+    if not top_groups:
+        return None
+
+    data = month_df.copy()
+    data[result.group_col] = data[result.group_col].astype(str)
+    data = data[data[result.group_col].isin(top_groups)].copy()
+
+    print("TOP GROUPS VOLUME:", top_groups)
+    print("VISIBLE GROUPS VOLUME:", data[result.group_col].drop_duplicates().tolist())
+
+    if data.empty:
+        return None
+
+    pretty = {
+        "displays": "Показы",
+        "clicks": "Клики",
+        "conversions": "Конверсии",
+    }
+    colors = {
+        "displays": "#88CCEE",
+        "clicks": "#4477AA",
+        "conversions": "#117733",
+    }
+
+    fig = go.Figure()
+
+    for group_value in top_groups:
+        part = data[data[result.group_col] == str(group_value)].copy()
+        if part.empty:
+            continue
+
+        row0 = part.iloc[0]
+        series_name = _month_series_name(result, row0)
+
+        for col in metric_cols:
+            fig.add_trace(go.Scatter(
+                x=part["Месяц"].astype(str).tolist(),
+                y=pd.to_numeric(part[col], errors="coerce").fillna(0).tolist(),
+                name=f"{pretty[col]} · {series_name}",
+                mode="lines+markers",
+                line=dict(color=colors[col], width=2.5),
+                marker=dict(size=7),
+                hovertemplate=(
+                    f"<b>%{{x}}</b><br>"
+                    f"{pretty[col]}: %{{y:,.0f}}<br>"
+                    f"Сегмент: {series_name}"
+                    f"<extra></extra>"
+                ),
+            ))
+
+    title = "Показы, клики и конверсии по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(title="Значение", rangemode="tozero"),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description=(
+            "Помесячная динамика объёмных метрик. "
+            "Если выбраны и кампании, и каналы, показаны только top-5 сочетаний."
+        ),
+    )
+
+def month_kpi_combo_result(result: AnalysisResult) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return None
+
+    pct_cols = [c for c in ("CTR", "CVR") if c in month_df.columns]
+    abs_cols = [c for c in ("CPC", "CPA") if c in month_df.columns]
+    metric_cols = pct_cols + abs_cols
+
+    if not metric_cols or result.group_col not in month_df.columns:
+        return None
+
+    top_groups = _month_top_groups(result, month_df, metric_cols, top_n=5)
+    if not top_groups:
+        return None
+
+    data = month_df.copy()
+    data[result.group_col] = data[result.group_col].astype(str)
+    data = data[data[result.group_col].isin(top_groups)].copy()
+
+    print("TOP GROUPS KPI:", top_groups)
+    print("VISIBLE GROUPS KPI:", data[result.group_col].drop_duplicates().tolist())
+
+    if data.empty:
+        return None
+
+    labels = result.metric_labels
+    colors = {
+        "CTR": "#882255",
+        "CVR": "#AA4499",
+        "CPC": "#DDCC77",
+        "CPA": "#999933",
+    }
+
+    fig = go.Figure()
+
+    for group_value in top_groups:
+        part = data[data[result.group_col] == str(group_value)].copy()
+        if part.empty:
+            continue
+
+        row0 = part.iloc[0]
+        series_name = _month_series_name(result, row0)
+
+        for col in pct_cols:
+            fig.add_trace(go.Scatter(
+                x=part["Месяц"].astype(str).tolist(),
+                y=pd.to_numeric(part[col], errors="coerce").fillna(0).tolist(),
+                name=f"{labels.get(col, col)} · {series_name}",
+                mode="lines+markers",
+                line=dict(color=colors[col], width=2.5),
+                marker=dict(size=7),
+                yaxis="y1",
+                hovertemplate=(
+                    f"<b>%{{x}}</b><br>"
+                    f"{labels.get(col, col)}: %{{y:.2f}}<br>"
+                    f"Сегмент: {series_name}"
+                    f"<extra></extra>"
+                ),
+            ))
+
+        for col in abs_cols:
+            fig.add_trace(go.Scatter(
+                x=part["Месяц"].astype(str).tolist(),
+                y=pd.to_numeric(part[col], errors="coerce").fillna(0).tolist(),
+                name=f"{labels.get(col, col)} · {series_name}",
+                mode="lines+markers",
+                line=dict(color=colors[col], width=2.5, dash="dot"),
+                marker=dict(size=7, symbol="diamond"),
+                yaxis="y2",
+                hovertemplate=(
+                    f"<b>%{{x}}</b><br>"
+                    f"{labels.get(col, col)}: %{{y:,.2f}}<br>"
+                    f"Сегмент: {series_name}"
+                    f"<extra></extra>"
+                ),
+            ))
+
+    title = "CTR, CVR, CPC и CPA по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(
+            title="CTR / CVR, %",
+            rangemode="tozero",
+        ),
+        yaxis2=dict(
+            title="CPC / CPA",
+            overlaying="y",
+            side="right",
+            rangemode="tozero",
+            showgrid=False,
+        ),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description=(
+            "Помесячная динамика KPI. "
+            "Если выбраны и кампании, и каналы, показаны только top-5 сочетаний."
+        ),
+    )
+
 def _truncate(s, n: int = 28) -> str:
     s = str(s)
     return s if len(s) <= n else s[: n - 1] + "…"
@@ -930,20 +1244,32 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     """Собирает все доступные Plotly-графики; порядок от обзорных к детальным."""
     specs: list[PlotlySpec] = []
 
-    for col, color in (
+    labels = result.metric_labels
+
+    # Месячные графики:
+    # - если выбраны и каналы, и кампании -> отдельный график на каждую метрику;
+    # - иначе -> 2 общих monthly combo-графика.
+    if result.channel_col and result.campaign_col:
+        for metric, color in (
             ("displays", "#88CCEE"),
             ("clicks", "#4477AA"),
             ("conversions", "#117733"),
             ("CTR", "#882255"),
             ("CVR", "#AA4499"),
-            ("CPA", "#999933"),
             ("CPC", "#DDCC77"),
-    ):
-        spec = month_metric_lines_result(result, col, color)
-        if spec:
-            specs.append(spec)
+            ("CPA", "#999933"),
+        ):
+            spec = _month_single_metric_chart(result, metric, color)
+            if spec:
+                specs.append(spec)
+    else:
+        month_volume = month_volume_combo_result(result)
+        if month_volume:
+            specs.append(month_volume)
 
-    labels = result.metric_labels
+        month_kpi = month_kpi_combo_result(result)
+        if month_kpi:
+            specs.append(month_kpi)
 
     funnel = _funnel_combo(result)
     if funnel:
@@ -960,14 +1286,14 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     has_combined_funnel = len(combined_funnel_metrics) >= 2
 
     for col, color in (
-            ("conversions", "#117733"),
-            ("clicks", "#4477AA"),
-            ("displays", "#88CCEE"),
-            ("total_cost", "#CC6677"),
-            ("CTR", "#882255"),
-            ("CVR", "#AA4499"),
-            ("CPA", "#999933"),
-            ("CPC", "#DDCC77"),
+        ("conversions", "#117733"),
+        ("clicks", "#4477AA"),
+        ("displays", "#88CCEE"),
+        ("total_cost", "#CC6677"),
+        ("CTR", "#882255"),
+        ("CVR", "#AA4499"),
+        ("CPA", "#999933"),
+        ("CPC", "#DDCC77"),
     ):
         if has_combined_funnel and col in {"displays", "clicks", "conversions"}:
             continue
