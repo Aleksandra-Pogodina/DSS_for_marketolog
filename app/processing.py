@@ -39,6 +39,7 @@ class AnalysisResult:
     recommendations: list[str]
     warnings: list[str]
     age_table: pd.DataFrame | None = None
+    month_table: pd.DataFrame | None = None
     rows_loaded: int = 0
     rows_dropped: int = 0
     rows_original: int = 0
@@ -259,6 +260,108 @@ def _build_age_table(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.Data
     result = result.rename(columns={"__age_group__": "Возрастная группа"})
     return result
 
+def _build_month_table(
+    df: pd.DataFrame,
+    mapping: dict,
+    group_col: str,
+    channel_col: str | None = None,
+    campaign_col: str | None = None,
+) -> pd.DataFrame | None:
+    month_col = mapping.get("month")
+    if not month_col or month_col not in df.columns:
+        return None
+
+    work = df.dropna(subset=[month_col]).copy()
+    if work.empty:
+        return None
+
+    work["__month_label__"] = work[month_col].astype("string").str.strip()
+    if work["__month_label__"].isna().all():
+        return None
+
+    aggregations = {}
+    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost"):
+        col = mapping.get(role)
+        if col and col in work.columns:
+            aggregations[role] = (col, "sum")
+
+    cpc_col = mapping.get("cpc")
+    if cpc_col and cpc_col in work.columns:
+        aggregations["cpc_avg"] = (cpc_col, "mean")
+
+    if not aggregations:
+        return None
+
+    group_fields = ["__month_label__", group_col]
+    if campaign_col and campaign_col in work.columns and campaign_col != group_col:
+        group_fields.append(campaign_col)
+    if channel_col and channel_col in work.columns and channel_col != group_col:
+        group_fields.append(channel_col)
+
+    grouped = (
+        work.groupby(group_fields, dropna=True)
+        .agg(**aggregations)
+        .reset_index()
+        .rename(columns={"__month_label__": "Месяц"})
+    )
+
+    if "clicks" in grouped.columns and "displays" in grouped.columns:
+        grouped["CTR"] = _safe_divide(grouped["clicks"], grouped["displays"]) * 100
+
+    cost_for_cpc = None
+    if "total_cost" in grouped.columns:
+        cost_for_cpc = grouped["total_cost"]
+    elif "placement_cost" in grouped.columns:
+        cost_for_cpc = grouped["placement_cost"]
+
+    if cost_for_cpc is not None and "clicks" in grouped.columns:
+        grouped["CPC"] = _safe_divide(cost_for_cpc, grouped["clicks"])
+    elif "cpc_avg" in grouped.columns:
+        grouped["CPC"] = grouped["cpc_avg"]
+
+    if "conversions" in grouped.columns and "clicks" in grouped.columns:
+        grouped["CVR"] = _safe_divide(grouped["conversions"], grouped["clicks"]) * 100
+
+    cost_for_cpa = None
+    if "total_cost" in grouped.columns:
+        cost_for_cpa = grouped["total_cost"]
+    elif "placement_cost" in grouped.columns:
+        cost_for_cpa = grouped["placement_cost"]
+
+    if cost_for_cpa is not None and "conversions" in grouped.columns:
+        grouped["CPA"] = _safe_divide(cost_for_cpa, grouped["conversions"])
+
+    month_order = {
+        "январь": 1, "янв": 1, "january": 1, "jan": 1, "1": 1, "01": 1,
+        "февраль": 2, "фев": 2, "february": 2, "feb": 2, "2": 2, "02": 2,
+        "март": 3, "мар": 3, "march": 3, "mar": 3, "3": 3, "03": 3,
+        "апрель": 4, "апр": 4, "april": 4, "apr": 4, "4": 4, "04": 4,
+        "май": 5, "may": 5, "5": 5, "05": 5,
+        "июнь": 6, "июн": 6, "june": 6, "jun": 6, "6": 6, "06": 6,
+        "июль": 7, "июл": 7, "july": 7, "jul": 7, "7": 7, "07": 7,
+        "август": 8, "авг": 8, "august": 8, "aug": 8, "8": 8, "08": 8,
+        "сентябрь": 9, "сен": 9, "september": 9, "sep": 9, "9": 9, "09": 9,
+        "октябрь": 10, "окт": 10, "october": 10, "oct": 10, "10": 10,
+        "ноябрь": 11, "ноя": 11, "november": 11, "nov": 11, "11": 11,
+        "декабрь": 12, "дек": 12, "december": 12, "dec": 12, "12": 12,
+    }
+
+    grouped["__month_sort__"] = (
+        grouped["Месяц"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .map(month_order)
+    )
+
+    sort_cols = ["__month_sort__", "Месяц"]
+    if campaign_col and campaign_col in grouped.columns:
+        sort_cols.append(campaign_col)
+    if channel_col and channel_col in grouped.columns:
+        sort_cols.append(channel_col)
+
+    grouped = grouped.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+    return grouped.drop(columns=["__month_sort__"], errors="ignore")
 
 def _pick_key_metric(mapping: dict) -> tuple[str | None, str | None]:
     """Возвращает (role, исходный_столбец) для главной метрики сводки.
@@ -506,6 +609,13 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
     ]
     recommendations, warnings = build_recommendations(metrics, mapping, group_col, group_label)
     age_table = _build_age_table(work, mapping, group_col)
+    month_table = _build_month_table(
+        work,
+        mapping,
+        group_col=group_col,
+        channel_col=channel_col,
+        campaign_col=campaign_col,
+    )
     extra_summary, extra_metric = _build_extra_summary(work, mapping, extra_col, channel_col)
 
     return AnalysisResult(
@@ -521,6 +631,7 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         recommendations=recommendations,
         warnings=warnings,
         age_table=age_table,
+        month_table=month_table,
         rows_loaded=len(work),
         rows_dropped=len(dropped),
         rows_original=len(work) + len(dropped),

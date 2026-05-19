@@ -44,6 +44,56 @@ def _funnel_title(cols: list[str]) -> str:
     # 3 ряда: «Показы, клики и конверсии»
     return f"{names[0]}, " + ", ".join(n.lower() for n in names[1:-1]) + f" и {names[-1].lower()}"
 
+def month_funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return None
+
+    cols_available = [c for c in ("displays", "clicks", "conversions") if c in month_df.columns]
+    if not cols_available:
+        return None
+
+    pretty = {"displays": "Показы", "clicks": "Клики", "conversions": "Конверсии"}
+    metric_colors = {"displays": "#88CCEE", "clicks": "#4477AA", "conversions": "#117733"}
+
+    fig = go.Figure()
+
+    for series_name, part in month_df.groupby(result.group_col, dropna=True):
+        part = part.copy()
+        x = part["Месяц"].astype(str).tolist()
+        label_row = part.iloc[0]
+        legend_name = _month_series_name(result, label_row)
+
+        for col in cols_available:
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=part[col].astype(float),
+                name=f"{pretty[col]} · {legend_name}",
+                mode="lines+markers",
+                line=dict(color=metric_colors[col], width=3),
+                marker=dict(size=7),
+                legendgroup=f"{col}",
+                hovertemplate=(
+                    f"<b>%{{x}}</b><br>"
+                    f"Сегмент: {legend_name}<br>"
+                    f"{pretty[col]}: %{{y:,.0f}}"
+                    f"<extra></extra>"
+                ),
+            ))
+
+    title = _funnel_title(cols_available) + " по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(title="Значение", rangemode="tozero"),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description="Помесячная динамика по выбранным каналам, кампаниям или их сочетаниям.",
+    )
+
 
 def _to_html(fig: go.Figure, title: str) -> str:
     """HTML-страница с прозрачным фоном — встраивается в любую тему Qt."""
@@ -75,6 +125,19 @@ def _to_html(fig: go.Figure, title: str) -> str:
 </body>
 </html>"""
 
+def _month_labels(month_df: pd.DataFrame) -> list[str]:
+    return month_df["Месяц"].astype(str).tolist()
+
+def _month_series_name(result: AnalysisResult, row: pd.Series) -> str:
+    if result.channel_col and result.campaign_col:
+        camp = str(row.get(result.campaign_col, "")).strip()
+        chan = str(row.get(result.channel_col, "")).strip()
+        return f"{camp} — {chan}"
+    if result.channel_col:
+        return str(row.get(result.channel_col, "")).strip()
+    if result.campaign_col:
+        return str(row.get(result.campaign_col, "")).strip()
+    return str(row.get(result.group_col, "")).strip()
 
 def _truncate(s, n: int = 28) -> str:
     s = str(s)
@@ -198,6 +261,69 @@ def _kpi_combo(result: AnalysisResult) -> PlotlySpec | None:
         description="Левая ось — проценты (CTR, CVR), правая — стоимость (CPC, CPA). Скрывайте ряды через легенду.",
     )
 
+def month_kpi_combo(result: AnalysisResult) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty:
+        return None
+
+    available_pct = [c for c in ("CTR", "CVR") if c in month_df.columns]
+    available_abs = [c for c in ("CPC", "CPA") if c in month_df.columns]
+
+    if not available_pct and not available_abs:
+        return None
+
+    labels = result.metric_labels
+    colors = {"CTR": "#882255", "CVR": "#AA4499", "CPC": "#DDCC77", "CPA": "#999933"}
+
+    x = _month_labels(month_df)
+    fig = go.Figure()
+
+    for col in available_pct:
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=month_df[col].astype(float),
+            name=labels.get(col, col),
+            mode="lines+markers",
+            line=dict(color=colors[col], width=3),
+            marker=dict(size=8),
+            yaxis="y1",
+            hovertemplate=f"<b>%{{x}}</b><br>{labels.get(col, col)}: %{{y:.2f}}<extra></extra>",
+        ))
+
+    for col in available_abs:
+        fig.add_trace(go.Scatter(
+            x=x,
+            y=month_df[col].astype(float),
+            name=labels.get(col, col),
+            mode="lines+markers",
+            line=dict(color=colors[col], width=3, dash="dot"),
+            marker=dict(size=8, symbol="diamond"),
+            yaxis="y2",
+            hovertemplate=f"<b>%{{x}}</b><br>{labels.get(col, col)}: %{{y:,.2f}}<extra></extra>",
+        ))
+
+    title = "CTR, CVR, CPC и CPA по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(
+            title="CTR / CVR, %",
+            rangemode="tozero",
+        ),
+        yaxis2=dict(
+            title="CPC / CPA",
+            overlaying="y",
+            side="right",
+            rangemode="tozero",
+            showgrid=False,
+        ),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description="Динамика KPI по месяцам: CTR и CVR на левой оси, CPC и CPA на правой.",
+    )
 
 def _shares(result: AnalysisResult) -> PlotlySpec | None:
     m = result.metrics
@@ -803,6 +929,20 @@ def _kpi_heatmap_grouped(result: AnalysisResult) -> PlotlySpec | None:
 def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     """Собирает все доступные Plotly-графики; порядок от обзорных к детальным."""
     specs: list[PlotlySpec] = []
+
+    for col, color in (
+            ("displays", "#88CCEE"),
+            ("clicks", "#4477AA"),
+            ("conversions", "#117733"),
+            ("CTR", "#882255"),
+            ("CVR", "#AA4499"),
+            ("CPA", "#999933"),
+            ("CPC", "#DDCC77"),
+    ):
+        spec = month_metric_lines_result(result, col, color)
+        if spec:
+            specs.append(spec)
+
     labels = result.metric_labels
 
     funnel = _funnel_combo(result)
@@ -916,4 +1056,45 @@ def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
             "Цвет показывает, насколько сегмент выше или ниже среднего по KPI; "
             "в ячейках показаны фактические значения."
         ),
+    )
+
+def month_metric_lines_result(result: AnalysisResult, value_col: str, color: str) -> PlotlySpec | None:
+    month_df = getattr(result, "month_table", None)
+    if month_df is None or month_df.empty or value_col not in month_df.columns:
+        return None
+
+    pretty = result.metric_labels.get(value_col, value_col)
+    fig = go.Figure()
+
+    for _, part in month_df.groupby(result.group_col, dropna=True):
+        part = part.copy()
+        row0 = part.iloc[0]
+        legend_name = _month_series_name(result, row0)
+
+        fig.add_trace(go.Scatter(
+            x=part["Месяц"].astype(str),
+            y=part[value_col].astype(float),
+            name=legend_name,
+            mode="lines+markers",
+            line=dict(color=color, width=3),
+            marker=dict(size=8),
+            hovertemplate=(
+                f"<b>%{{x}}</b><br>"
+                f"{pretty}: %{{y:,.2f}}<br>"
+                f"Сегмент: {legend_name}"
+                f"<extra></extra>"
+            ),
+        ))
+
+    title = f"{pretty} по месяцам"
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        xaxis=dict(title="Месяц"),
+        yaxis=dict(title=pretty, rangemode="tozero"),
+    )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description="Помесячная динамика с разбивкой по выбранным сегментам.",
     )
