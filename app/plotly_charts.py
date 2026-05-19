@@ -181,6 +181,48 @@ def _month_top_groups(
 
     return groups_all
 
+def _campaign_channel_style_map(result: AnalysisResult, data: pd.DataFrame) -> dict[str, dict]:
+    campaign_palettes = [
+        ["#1f77b4", "#4f9ed8", "#87c3eb", "#b7dcf6"],  # blue
+        ["#2ca02c", "#5dbb63", "#8fd18f", "#bee6be"],  # green
+        ["#ff7f0e", "#ff9f4a", "#ffc078", "#ffe0b2"],  # orange
+        ["#d62728", "#e15759", "#f28e8e", "#f8bcbc"],  # red
+        ["#9467bd", "#b08ad1", "#c9afe3", "#e0d2f1"],  # purple
+        ["#17becf", "#56d2df", "#8fe3ea", "#c5f1f4"],  # cyan
+    ]
+    dash_cycle = ["solid", "dash", "dot", "dashdot"]
+
+    style_map: dict[str, dict] = {}
+
+    if result.channel_col and result.campaign_col:
+        campaigns = [
+            str(x) for x in data[result.campaign_col].dropna().astype(str).drop_duplicates().tolist()
+        ]
+
+        for i, campaign in enumerate(campaigns):
+            campaign_df = data[data[result.campaign_col].astype(str) == campaign]
+            channels = [
+                str(x) for x in campaign_df[result.channel_col].dropna().astype(str).drop_duplicates().tolist()
+            ]
+
+            palette = campaign_palettes[i % len(campaign_palettes)]
+            for j, channel in enumerate(channels):
+                key = f"{channel} · {campaign}"
+                style_map[key] = {
+                    "color": palette[j % len(palette)],
+                    "dash": dash_cycle[j % len(dash_cycle)],
+                }
+    else:
+        default_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#17becf"]
+        groups = [str(x) for x in data[result.group_col].dropna().astype(str).drop_duplicates().tolist()]
+        for i, g in enumerate(groups):
+            style_map[g] = {
+                "color": default_colors[i % len(default_colors)],
+                "dash": "solid",
+            }
+
+    return style_map
+
 def _month_single_metric_chart(
     result: AnalysisResult,
     metric: str,
@@ -194,47 +236,52 @@ def _month_single_metric_chart(
 
     data = month_df.copy()
     data[result.group_col] = data[result.group_col].astype(str)
+    style_map = _campaign_channel_style_map(result, data)
 
     label = result.metric_labels.get(metric, metric)
     fig = go.Figure()
 
     for group_value, part in data.groupby(result.group_col, dropna=True):
         part = part.copy()
-        part["Месяц"] = part["Месяц"].astype(str)
+        if part.empty:
+            continue
 
         row0 = part.iloc[0]
         series_name = _month_series_name(result, row0)
 
         if metric in ("CTR", "CVR"):
-            hover_value = "%{y:.2f}%"
-            y_title = label
+            hover_tpl = (
+                f"<b>%{{x}}</b><br>{label}: %{{y:.2f}}%<br>"
+                f"Сегмент: {series_name}<extra></extra>"
+            )
         elif metric in ("CPC", "CPA"):
-            hover_value = "%{y:,.2f}"
-            y_title = label
+            hover_tpl = (
+                f"<b>%{{x}}</b><br>{label}: %{{y:,.2f}}<br>"
+                f"Сегмент: {series_name}<extra></extra>"
+            )
         else:
-            hover_value = "%{y:,.0f}"
-            y_title = label
+            hover_tpl = (
+                f"<b>%{{x}}</b><br>{label}: %{{y:,.0f}}<br>"
+                f"Сегмент: {series_name}<extra></extra>"
+            )
+
+        style = style_map.get(str(group_value), {"color": color, "dash": "solid"})
 
         fig.add_trace(go.Scatter(
-            x=part["Месяц"].tolist(),
+            x=part["Месяц"].astype(str).tolist(),
             y=pd.to_numeric(part[metric], errors="coerce").fillna(0).tolist(),
             name=series_name,
             mode="lines+markers",
-            line=dict(color=color, width=2.5),
-            marker=dict(size=7),
-            hovertemplate=(
-                f"<b>%{{x}}</b><br>"
-                f"{label}: {hover_value}<br>"
-                f"Сегмент: {series_name}"
-                f"<extra></extra>"
-            ),
+            line=dict(color=style["color"], width=2.5, dash=style["dash"]),
+            marker=dict(size=7, color=style["color"]),
+            hovertemplate=hover_tpl,
         ))
 
     title = f"{label} по месяцам"
     fig.update_layout(
         **_BASE_LAYOUT,
         xaxis=dict(title="Месяц"),
-        yaxis=dict(title=y_title, rangemode="tozero"),
+        yaxis=dict(title=label, rangemode="tozero"),
     )
 
     return PlotlySpec(
