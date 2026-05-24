@@ -956,14 +956,26 @@ def _funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
     fig = go.Figure()
     for col in cols_available:
         fig.add_trace(go.Bar(
-            x=x, y=m[col].astype(float),
+            x=x,
+            y=m[col].astype(float),
             name=_FUNNEL_LABELS[col],
             marker_color=colors.get(col),
             hovertemplate="<b>%{x}</b><br>" + _FUNNEL_LABELS[col] + ": %{y:,.0f}<extra></extra>",
         ))
 
-    fig.update_layout(**_BASE_LAYOUT, barmode="group", yaxis_title="Значение")
+    layout = dict(_BASE_LAYOUT)
+    layout["barmode"] = "group"
+    layout["yaxis_title"] = "Значение"
+    layout["margin"] = dict(l=60, r=30, t=70, b=140)
+
+    fig.update_layout(**layout)
+
     _apply_segment_xaxis(fig, kind)
+
+    fig.update_xaxes(
+        tickangle=-35,
+        automargin=True,
+    )
 
     chart_title = _funnel_title(cols_available)
     return PlotlySpec(
@@ -1148,8 +1160,10 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         annotations = []
         shapes = []
 
+        n = len(campaigns)
         start = 0
         current = campaigns[0]
+
         for i, camp in enumerate(campaigns[1:], start=1):
             if camp != current:
                 annotations.append(dict(
@@ -1163,16 +1177,20 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
                     yanchor="top",
                     font=dict(size=11)
                 ))
+
+                # Верхний разделитель в paper-координатах
+                x_paper = i / n
                 shapes.append(dict(
                     type="line",
-                    xref="x",
+                    xref="paper",
                     yref="paper",
-                    x0=i - 0.5,
-                    x1=i - 0.5,
-                    y0=0,
-                    y1=1,
+                    x0=x_paper,
+                    x1=x_paper,
+                    y0=1.01,
+                    y1=1.10,
                     line=dict(color="rgba(120,120,120,0.45)", width=1)
                 ))
+
                 start = i
                 current = camp
 
@@ -1188,8 +1206,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
             font=dict(size=11)
         ))
 
+        top_margin = 95
         bottom_margin = 165
-        tick_angle = -35
 
         customdata = np.column_stack([
             data[result.campaign_col].astype(str).to_numpy(),
@@ -1206,8 +1224,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         x_labels = data[result.group_col].astype(str).tolist()
         annotations = []
         shapes = []
-        bottom_margin = 100
-        tick_angle = 0
+        top_margin = 70
+        bottom_margin = 130
 
         customdata = np.column_stack([data[result.group_col].astype(str).to_numpy()])
         hovertemplate = (
@@ -1225,7 +1243,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
     ))
 
     layout = dict(_BASE_LAYOUT)
-    layout["margin"] = dict(l=60, r=30, t=70, b=bottom_margin)
+    layout["margin"] = dict(l=60, r=30, t=top_margin, b=bottom_margin)
     layout["title"] = dict(text=f"{pretty_name} — ранжирование", x=0.02, xanchor="left")
     layout["showlegend"] = False
     layout["annotations"] = annotations
@@ -1234,7 +1252,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         tickmode="array",
         tickvals=list(range(len(data))),
         ticktext=x_labels,
-        tickangle=tick_angle,
+        tickangle=-35,
         automargin=True,
     )
     layout["yaxis"] = dict(title=pretty_name)

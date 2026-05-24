@@ -460,7 +460,7 @@ class MainWindow(QMainWindow):
         if not mapping.get("channels") and not mapping.get("campaigns"):
             problems.append("выберите «Каналы» или «Кампании»")
 
-        metric_roles = ["displays", "clicks", "conversions", "total_cost", "placement_cost", "cpc"]
+        metric_roles = ["displays", "clicks", "conversions", "total_cost", "placement_cost", "clicks_cost", "revenue"]
         if not any(mapping.get(r) for r in metric_roles):
             problems.append("выберите хотя бы одно числовое поле")
 
@@ -480,7 +480,7 @@ class MainWindow(QMainWindow):
         if not mapping.get("channels") and not mapping.get("campaigns"):
             raise ValueError("Выберите столбец «Каналы» или «Кампании» для группировки.")
 
-        metric_roles = ["displays", "clicks", "conversions", "total_cost", "placement_cost", "cpc"]
+        metric_roles = ["displays", "clicks", "conversions", "total_cost", "placement_cost", "cpc", "revenue"]
         if not any(mapping.get(role) for role in metric_roles):
             raise ValueError(
                 "Выберите хотя бы один числовой столбец: показы, клики, конверсии или стоимость."

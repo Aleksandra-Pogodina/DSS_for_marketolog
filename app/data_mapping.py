@@ -15,9 +15,9 @@ ROLE_NAMES = [
     "conversions",
     "total_cost",
     "placement_cost",
-    "cpc",
+    "clicks_cost",
     "age",
-    "city",
+    "revenue",
     "month",
     "extra_category",
 ]
@@ -30,9 +30,9 @@ ROLE_LABELS_RU = {
     "conversions": "Конверсии",
     "total_cost": "Общая стоимость",
     "placement_cost": "Стоимость размещения",
-    "cpc": "Стоимость за клик",
+    "clicks_cost": "Стоимость за клики",
     "age": "Возраст",
-    "city": "Город",
+    "revenue": "Выручка",
     "month": "Месяц",
     "extra_category": "Доп. категория",
 }
@@ -43,8 +43,9 @@ NUMERIC_ROLES = {
     "conversions",
     "total_cost",
     "placement_cost",
-    "cpc",
+    "clicks_cost",
     "age",
+    "revenue",
 }
 
 GROUPING_ROLES = ("channels", "campaigns")
@@ -138,9 +139,9 @@ def auto_guess_mapping(columns) -> dict:
         "conversions": ["conversion", "конверс", "order", "заказ"],
         "total_cost": ["total_cost", "totalcost", "общая", "spend", "затрат", "расход"],
         "placement_cost": ["placement", "размещен", "cost"],
-        "cpc": ["cpc", "cost_per_click", "цена за клик", "стоимость за клик", "revenue"],
+        "clicks_cost": ["clicks_cost", "click_cost", "click_costs", "стоимость за клики", "затраты на клики"],
         #"age": ["age", "возраст"],
-        "city": ["city", "город", "регион", "region"],
+        "revenue": ["revenue", "sales_amount", "sales", "transaction_value", "value", "выруч", "доход"],
         "month": ["month", "месяц", "date", "дата"],
     }
 

@@ -136,7 +136,7 @@ def clean_dataframe(df: pd.DataFrame, mapping: dict) -> tuple[pd.DataFrame, pd.D
         if col and col in df.columns:
             df[col] = _safe_to_numeric(df[col])
 
-    for role in ("channels", "campaigns", "city", "month", "extra_category"):
+    for role in ("channels", "campaigns", "month", "extra_category"):
         col = mapping.get(role)
         if col and col in df.columns:
             df[col] = df[col].astype("string").str.strip()
@@ -166,27 +166,27 @@ METRIC_LABELS = {
     "conversions": "Конверсии",
     "total_cost": "Общая стоимость",
     "placement_cost": "Стоимость размещения",
-    "cpc_avg": "Средний CPC (из данных)",
+    "clicks_cost": "Стоимость за клики",
+    "revenue": "Выручка",
     "CTR": "CTR, %",
     "CPC": "CPC",
     "CVR": "CVR, %",
     "CPA": "CPA",
     "cost_share": "Доля затрат, %",
     "conv_share": "Доля конверсий, %",
+    "revenue_share": "Доля выручки, %",
+    "value_per_conversion": "AOV",
+    "ROAS": "ROAS",
 }
 
 
 def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.DataFrame:
     """Агрегирует исходные метрики по группе и считает производные KPI."""
     aggregations = {}
-    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost"):
+    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost", "revenue", "clicks_cost"):
         col = mapping.get(role)
         if col and col in df.columns:
             aggregations[role] = (col, "sum")
-
-    cpc_col = mapping.get("cpc")
-    if cpc_col and cpc_col in df.columns:
-        aggregations["cpc_avg"] = (cpc_col, "mean")
 
     if not aggregations:
         return pd.DataFrame()
@@ -203,8 +203,6 @@ def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.Da
         cost_for_cpc = grouped["placement_cost"]
     if cost_for_cpc is not None and "clicks" in grouped:
         grouped["CPC"] = _safe_divide(cost_for_cpc, grouped["clicks"])
-    elif "cpc_avg" in grouped:
-        grouped["CPC"] = grouped["cpc_avg"]
 
     if "conversions" in grouped and "clicks" in grouped:
         grouped["CVR"] = _safe_divide(grouped["conversions"], grouped["clicks"]) * 100
@@ -227,6 +225,22 @@ def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.Da
         total = grouped["conversions"].sum(skipna=True)
         if total and not pd.isna(total) and total > 0:
             grouped["conv_share"] = grouped["conversions"] / total * 100
+
+    if "revenue" in grouped and "conversions" in grouped:
+        grouped["value_per_conversion"] = _safe_divide(grouped["revenue"], grouped["conversions"])
+
+    if "revenue" in grouped:
+        cost_for_roas = None
+        if "total_cost" in grouped:
+            cost_for_roas = grouped["total_cost"]
+        elif "placement_cost" in grouped:
+            cost_for_roas = grouped["placement_cost"]
+        if cost_for_roas is not None:
+            grouped["ROAS"] = _safe_divide(grouped["revenue"], cost_for_roas)
+
+        total_revenue = grouped["revenue"].sum(skipna=True)
+        if total_revenue and not pd.isna(total_revenue) and total_revenue > 0:
+            grouped["revenue_share"] = grouped["revenue"] / total_revenue * 100
 
     return grouped
 
@@ -606,6 +620,8 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
             else:
                 metrics = metrics.sort_values(sort_col, ascending=False).reset_index(drop=True)
             break
+
+
 
     available = [
         c for c in metrics.columns
