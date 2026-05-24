@@ -98,32 +98,305 @@ def month_funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
 def _to_html(fig: go.Figure, title: str) -> str:
     """HTML-страница с прозрачным фоном — встраивается в любую тему Qt."""
     fig.update_layout(
-        title=dict(text=title, x=0.02, xanchor="left"),
+        title=None,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
     )
+
     inner = pio.to_html(
-        fig, include_plotlyjs="cdn", full_html=False,
+        fig,
+        include_plotlyjs="cdn",
+        full_html=False,
         config={
-            "displaylogo": False, "responsive": True,
+            "displaylogo": False,
+            "responsive": True,
             "toImageButtonOptions": {"format": "png", "scale": 2},
             "modeBarButtonsToRemove": ["lasso2d", "select2d"],
         },
     )
-    return f"""<!DOCTYPE html>
+
+    return f"""
+<!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>{title}</title>
-<style>
-  html, body {{ margin: 0; padding: 0; height: 100%; background: transparent; }}
-  .plotly-graph-div {{ width: 100% !important; height: 100% !important; }}
-</style>
+  <meta charset="utf-8">
+  <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }}
+    #wrap {{
+      width: 100%;
+      height: 100vh;
+    }}
+    .js-plotly-plot, .plot-container, .main-svg {{
+      width: 100% !important;
+      height: 100% !important;
+    }}
+  </style>
 </head>
 <body>
-{inner}
+  <div id="wrap">{inner}</div>
 </body>
-</html>"""
+</html>
+"""
+
+def _monthly_metric_specs_by_channel(result: AnalysisResult) -> list[PlotlySpec]:
+    mapping = result.mapping
+    month_col = mapping.get("month")
+    channel_col = result.channel_col
+    campaign_col = result.campaign_col
+
+    if not month_col or not channel_col or not campaign_col:
+        return []
+
+    if month_col not in result.cleaned.columns:
+        return []
+
+    metric_defs = [
+        ("displays", "Показы по месяцам"),
+        ("clicks", "Клики по месяцам"),
+        ("conversions", "Конверсии по месяцам"),
+        ("CTR", "CTR по месяцам"),
+        ("CVR", "CVR по месяцам"),
+        ("CPC", "CPC по месяцам"),
+        ("CPA", "CPA по месяцам"),
+    ]
+
+    work = result.cleaned.copy()
+    work = work.dropna(subset=[month_col, channel_col, campaign_col])
+
+    if work.empty:
+        return []
+
+    month_order = list(dict.fromkeys(work[month_col].astype(str).tolist()))
+    channel_order = list(dict.fromkeys(work[channel_col].astype(str).tolist()))
+
+    agg_map = {}
+    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost"):
+        col = mapping.get(role)
+        if col and col in work.columns:
+            agg_map[role] = (col, "sum")
+
+    cpc_col = mapping.get("cpc")
+    if cpc_col and cpc_col in work.columns:
+        agg_map["cpc_avg"] = (cpc_col, "mean")
+
+    if not agg_map:
+        return []
+
+    monthly = (
+        work.groupby([channel_col, campaign_col, month_col], dropna=True)
+        .agg(**agg_map)
+        .reset_index()
+    )
+
+    if "clicks" in monthly.columns and "displays" in monthly.columns:
+        monthly["CTR"] = (monthly["clicks"] / monthly["displays"].replace(0, np.nan)) * 100
+
+    cost_for_cpc = None
+    if "total_cost" in monthly.columns:
+        cost_for_cpc = monthly["total_cost"]
+    elif "placement_cost" in monthly.columns:
+        cost_for_cpc = monthly["placement_cost"]
+
+    if cost_for_cpc is not None and "clicks" in monthly.columns:
+        monthly["CPC"] = cost_for_cpc / monthly["clicks"].replace(0, np.nan)
+    elif "cpc_avg" in monthly.columns:
+        monthly["CPC"] = monthly["cpc_avg"]
+
+    if "conversions" in monthly.columns and "clicks" in monthly.columns:
+        monthly["CVR"] = (monthly["conversions"] / monthly["clicks"].replace(0, np.nan)) * 100
+
+    cost_for_cpa = None
+    if "total_cost" in monthly.columns:
+        cost_for_cpa = monthly["total_cost"]
+    elif "placement_cost" in monthly.columns:
+        cost_for_cpa = monthly["placement_cost"]
+
+    if cost_for_cpa is not None and "conversions" in monthly.columns:
+        monthly["CPA"] = cost_for_cpa / monthly["conversions"].replace(0, np.nan)
+
+    specs: list[PlotlySpec] = []
+    palette = _series_colors()
+
+    for metric, title in metric_defs:
+        if metric not in monthly.columns or monthly[metric].notna().sum() == 0:
+            continue
+
+        channel_figures: dict[str, go.Figure] = {}
+
+        for channel_idx, channel in enumerate(channel_order):
+            channel_df = monthly[monthly[channel_col].astype(str) == str(channel)].copy()
+            if channel_df.empty:
+                continue
+
+            campaigns = list(dict.fromkeys(channel_df[campaign_col].astype(str).tolist()))
+            fig = go.Figure()
+
+            for i, campaign in enumerate(campaigns):
+                part = channel_df[channel_df[campaign_col].astype(str) == str(campaign)].copy()
+                if part.empty:
+                    continue
+
+                month_map = {m: idx for idx, m in enumerate(month_order)}
+                part["__month_order__"] = part[month_col].astype(str).map(month_map)
+                part = part.sort_values("__month_order__")
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=part[month_col].astype(str),
+                        y=part[metric],
+                        mode="lines+markers",
+                        name=str(campaign),
+                        line=dict(width=3, color=palette[i % len(palette)]),
+                        marker=dict(size=7, color=palette[i % len(palette)]),
+                        connectgaps=False,
+                    )
+                )
+
+            fig.update_layout(
+                **_BASE_LAYOUT,
+                margin=dict(l=55, r=25, t=30, b=70),
+                xaxis=dict(
+                    title="Месяц",
+                    type="category",
+                    categoryorder="array",
+                    categoryarray=month_order,
+                    tickangle=0,
+                ),
+                yaxis=dict(title=result.metric_labels.get(metric, metric)),
+            )
+
+            channel_figures[str(channel)] = fig
+
+        if channel_figures:
+            specs.append(
+                PlotlySpec(
+                    title=title,
+                    html=_to_html_with_channel_switch(channel_figures, title),
+                    description=f"Сравнение кампаний внутри выбранного канала по показателю «{result.metric_labels.get(metric, metric)}».",
+                )
+            )
+
+    return specs
+
+def _to_html_with_channel_switch(figures: dict[str, go.Figure], title: str) -> str:
+    """HTML с select-переключателем канала: один график на метрику, внутри — кампании выбранного канала."""
+    prepared = {}
+    for channel, fig in figures.items():
+        fig.update_layout(
+            title=None,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        prepared[channel] = fig.to_json()
+
+    channels = list(figures.keys())
+    if not channels:
+        empty_fig = go.Figure()
+        return _to_html(empty_fig, title)
+
+    import json
+    figures_json = json.dumps(prepared, ensure_ascii=False)
+    channels_json = json.dumps(channels, ensure_ascii=False)
+
+    return f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: DejaVu Sans, Arial, sans-serif;
+    }}
+    #root {{
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100vh;
+      box-sizing: border-box;
+    }}
+    #toolbar {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px 0 12px;
+      flex: 0 0 auto;
+    }}
+    #toolbar label {{
+      font-size: 13px;
+      font-weight: 600;
+    }}
+    #channelSelect {{
+      min-width: 220px;
+      max-width: 360px;
+      padding: 6px 10px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid #cfd6e2;
+      background: #ffffff;
+    }}
+    #chart {{
+      flex: 1 1 auto;
+      min-height: 0;
+      width: 100%;
+    }}
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="toolbar">
+      <label for="channelSelect">Канал:</label>
+      <select id="channelSelect"></select>
+    </div>
+    <div id="chart"></div>
+  </div>
+
+  <script>
+    const figures = {figures_json};
+    const channels = {channels_json};
+    const select = document.getElementById("channelSelect");
+    const chart = document.getElementById("chart");
+
+    channels.forEach(ch => {{
+      const opt = document.createElement("option");
+      opt.value = ch;
+      opt.textContent = ch;
+      select.appendChild(opt);
+    }});
+
+    function renderChannel(channel) {{
+      const fig = JSON.parse(figures[channel]);
+      Plotly.react("chart", fig.data, fig.layout, {{
+        displaylogo: false,
+        responsive: true,
+        toImageButtonOptions: {{ format: "png", scale: 2 }},
+        modeBarButtonsToRemove: ["lasso2d", "select2d"]
+      }});
+    }}
+
+    select.addEventListener("change", () => renderChannel(select.value));
+
+    if (channels.length > 0) {{
+      select.value = channels[0];
+      renderChannel(channels[0]);
+    }}
+  </script>
+</body>
+</html>
+"""
 
 def _month_labels(month_df: pd.DataFrame) -> list[str]:
     return month_df["Месяц"].astype(str).tolist()
@@ -236,9 +509,122 @@ def _month_single_metric_chart(
 
     data = month_df.copy()
     data[result.group_col] = data[result.group_col].astype(str)
-    style_map = _campaign_channel_style_map(result, data)
 
     label = result.metric_labels.get(metric, metric)
+    title = f"{label} по месяцам"
+
+    # ---------- режим: и канал, и кампания ----------
+    if result.channel_col and result.campaign_col:
+        if result.channel_col not in data.columns or result.campaign_col not in data.columns:
+            return None
+        if "Месяц" not in data.columns:
+            return None
+
+        data[result.channel_col] = data[result.channel_col].astype(str)
+        data[result.campaign_col] = data[result.campaign_col].astype(str)
+
+        month_order = list(dict.fromkeys(data["Месяц"].astype(str).tolist()))
+        channel_order = list(dict.fromkeys(data[result.channel_col].tolist()))
+        style_map = _campaign_channel_style_map(result, data)
+
+        figures_by_channel: dict[str, go.Figure] = {}
+
+        for channel in channel_order:
+            part_channel = data[data[result.channel_col] == channel].copy()
+
+            if part_channel.empty:
+                continue
+
+            (data[[result.channel_col, result.campaign_col, "Месяц", metric]].to_string())
+            fig = go.Figure()
+            campaign_order = list(dict.fromkeys(part_channel[result.campaign_col].tolist()))
+
+            for campaign in campaign_order:
+                part = part_channel[part_channel[result.campaign_col] == campaign].copy()
+                if part.empty:
+                    continue
+
+                part["__month_order__"] = (
+                    part["Месяц"].astype(str).map({m: i for i, m in enumerate(month_order)})
+                )
+                part = part.sort_values("__month_order__")
+
+                row0 = part.iloc[0]
+                group_value = str(row0[result.group_col])
+                series_name = str(campaign)
+
+                if metric in ("CTR", "CVR"):
+                    hover_tpl = (
+                        f"<b>%{{x}}</b><br>{label}: %{{y:.2f}}%<br>"
+                        f"Канал: {channel}<br>Кампания: {series_name}<extra></extra>"
+                    )
+                elif metric in ("CPC", "CPA"):
+                    hover_tpl = (
+                        f"<b>%{{x}}</b><br>{label}: %{{y:,.2f}}<br>"
+                        f"Канал: {channel}<br>Кампания: {series_name}<extra></extra>"
+                    )
+                else:
+                    hover_tpl = (
+                        f"<b>%{{x}}</b><br>{label}: %{{y:,.0f}}<br>"
+                        f"Канал: {channel}<br>Кампания: {series_name}<extra></extra>"
+                    )
+
+                style = style_map.get(group_value, {"color": color, "dash": "solid"})
+
+                y_values = pd.to_numeric(part[metric], errors="coerce")
+                non_na_count = int(y_values.notna().sum())
+                is_single_point = non_na_count <= 1
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=part["Месяц"].astype(str).tolist(),
+                        y=y_values.tolist(),
+                        name=series_name,
+                        mode="lines+markers",
+                        line=dict(
+                            color=style["color"],
+                            width=2.5,
+                            dash=style["dash"],
+                        ),
+                        marker=dict(
+                            size=12 if is_single_point else 7,
+                            color=style["color"],
+                            symbol="diamond" if is_single_point else "circle",
+                            line=dict(
+                                color="white",
+                                width=1.5 if is_single_point else 0.5,
+                            ),
+                        ),
+                        hovertemplate=hover_tpl,
+                        connectgaps=False,
+                    )
+                )
+
+            layout = dict(_BASE_LAYOUT)
+            layout["margin"] = dict(l=55, r=25, t=30, b=70)
+            layout["xaxis"] = dict(
+                title="Месяц",
+                type="category",
+                categoryorder="array",
+                categoryarray=month_order,
+            )
+            layout["yaxis"] = dict(title=label, rangemode="tozero")
+
+            fig.update_layout(**layout)
+
+            figures_by_channel[channel] = fig
+
+        if not figures_by_channel:
+            return None
+
+        return PlotlySpec(
+            title=title,
+            html=_to_html_with_channel_switch(figures_by_channel, title),
+            description=f"Помесячная динамика метрики «{label}» с переключением по каналам.",
+        )
+
+    # ---------- обычный режим ----------
+    style_map = _campaign_channel_style_map(result, data)
     fig = go.Figure()
 
     for group_value, part in data.groupby(result.group_col, dropna=True):
@@ -267,17 +653,19 @@ def _month_single_metric_chart(
 
         style = style_map.get(str(group_value), {"color": color, "dash": "solid"})
 
-        fig.add_trace(go.Scatter(
-            x=part["Месяц"].astype(str).tolist(),
-            y=pd.to_numeric(part[metric], errors="coerce").fillna(0).tolist(),
-            name=series_name,
-            mode="lines+markers",
-            line=dict(color=style["color"], width=2.5, dash=style["dash"]),
-            marker=dict(size=7, color=style["color"]),
-            hovertemplate=hover_tpl,
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=part["Месяц"].astype(str).tolist(),
+                y=pd.to_numeric(part[metric], errors="coerce").tolist(),
+                name=series_name,
+                mode="lines+markers",
+                line=dict(color=style["color"], width=2.5, dash=style["dash"]),
+                marker=dict(size=7, color=style["color"]),
+                hovertemplate=hover_tpl,
+                connectgaps=False,
+            )
+        )
 
-    title = f"{label} по месяцам"
     fig.update_layout(
         **_BASE_LAYOUT,
         xaxis=dict(title="Месяц"),
@@ -1286,16 +1674,14 @@ def _kpi_heatmap_grouped(result: AnalysisResult) -> PlotlySpec | None:
     )
 
 # ---------- основной build --------------------------------------------------
-
 def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     """Собирает все доступные Plotly-графики; порядок от обзорных к детальным."""
     specs: list[PlotlySpec] = []
 
-    labels = result.metric_labels
-
-    # Месячные графики:
-    # - если выбраны и каналы, и кампании -> отдельный график на каждую метрику;
-    # - иначе -> 2 общих monthly combo-графика.
+    # ---------- месячные графики ----------
+    # Если выбраны и каналы, и кампании, то месячные линейные графики
+    # строим по одной метрике: внутри такого графика уже есть переключение по каналу.
+    # Иначе оставляем 2 обзорных monthly combo-графика.
     if result.channel_col and result.campaign_col:
         for metric, color in (
             ("displays", "#88CCEE"),
@@ -1307,31 +1693,35 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
             ("CPA", "#999933"),
         ):
             spec = _month_single_metric_chart(result, metric, color)
-            if spec:
+            if spec is not None:
                 specs.append(spec)
     else:
         month_volume = month_volume_combo_result(result)
-        if month_volume:
+        if month_volume is not None:
             specs.append(month_volume)
 
         month_kpi = month_kpi_combo_result(result)
-        if month_kpi:
+        if month_kpi is not None:
             specs.append(month_kpi)
 
+    # ---------- обзорные графики ----------
     funnel = _funnel_combo(result)
-    if funnel:
+    if funnel is not None:
         specs.append(funnel)
 
     hm = _kpi_heatmap_grouped(result)
-    if hm:
+    if hm is not None:
         specs.append(hm)
 
+    # Если уже есть общий funnel по базовым метрикам, не дублируем их ranking-графиками.
     combined_funnel_metrics = {
-        c for c in ("displays", "clicks", "conversions")
-        if c in result.metrics.columns and result.metrics[c].notna().any()
+        col
+        for col in ("displays", "clicks", "conversions")
+        if col in result.metrics.columns and result.metrics[col].notna().any()
     }
     has_combined_funnel = len(combined_funnel_metrics) >= 2
 
+    # ---------- ranking / detail ----------
     for col, color in (
         ("conversions", "#117733"),
         ("clicks", "#4477AA"),
@@ -1342,13 +1732,17 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
         ("CPA", "#999933"),
         ("CPC", "#DDCC77"),
     ):
+        if col not in result.metrics.columns:
+            continue
+        if not result.metrics[col].notna().any():
+            continue
+
         if has_combined_funnel and col in {"displays", "clicks", "conversions"}:
             continue
 
-        if col in result.metrics.columns:
-            spec = _ranking_bar(result, col, color)
-            if spec:
-                specs.append(spec)
+        spec = _ranking_bar(result, col, color)
+        if spec is not None:
+            specs.append(spec)
 
     return specs
 
