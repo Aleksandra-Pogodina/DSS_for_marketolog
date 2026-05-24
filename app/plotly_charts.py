@@ -1266,6 +1266,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
     )
 
 
+
+
 def _kpi_zscore_heatmap(result: AnalysisResult) -> PlotlySpec | None:
     m = result.metrics
     cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in m.columns and m[c].notna().any()]
@@ -1780,6 +1782,86 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
             specs.append(spec)
 
     return specs
+
+def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
+    """Сравнение долей затрат, конверсий и выручки по сегментам."""
+    df = result.metrics.copy()
+
+    needed = ["cost_share", "conv_share", "revenue_share"]
+    available = [c for c in needed if c in df.columns]
+    if len(available) < 2:
+        return None
+
+    colors = {
+        "cost_share": "#c65d3a",
+        "conv_share": "#2f7d4a",
+        "revenue_share": "#2f6db2",
+    }
+    labels = {
+        "cost_share": "Доля затрат",
+        "conv_share": "Доля конверсий",
+        "revenue_share": "Доля выручки",
+    }
+
+    fig = go.Figure()
+
+    if result.channel_col and result.campaign_col:
+        x_vals = [df[result.campaign_col].astype(str), df[result.channel_col].astype(str)]
+    else:
+        x_vals = df[result.group_col].astype(str)
+
+    for col in available:
+        fig.add_trace(
+            go.Bar(
+                x=x_vals,
+                y=df[col],
+                name=labels[col],
+                marker_color=colors[col],
+                text=[f"{v:.1f}%" if pd.notna(v) else "" for v in df[col]],
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate=(
+                    f"{labels[col]}<br>"
+                    "%{x}<br>"
+                    "%{y:.2f}%<extra></extra>"
+                ),
+            )
+        )
+
+    title = "Сравнение долей затрат, конверсий и выручки"
+
+    fig.update_layout(
+        **_BASE_LAYOUT,
+        barmode="group",
+        title=title,
+        yaxis=dict(
+            title="Доля, %",
+            ticksuffix="%",
+            rangemode="tozero",
+        ),
+        margin=dict(l=60, r=30, t=70, b=140),
+    )
+
+    if result.channel_col and result.campaign_col:
+        fig.update_xaxes(
+            type="multicategory",
+            tickangle=0,
+            automargin=True,
+        )
+    else:
+        fig.update_xaxes(
+            tickangle=-35,
+            automargin=True,
+        )
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description=(
+            "График показывает, как по каждому сегменту соотносятся доля затрат, "
+            "доля конверсий и доля выручки."
+        ),
+    )
 
 def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
     m = result.metrics

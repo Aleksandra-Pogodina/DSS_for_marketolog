@@ -177,13 +177,23 @@ METRIC_LABELS = {
     "revenue_share": "Доля выручки, %",
     "value_per_conversion": "AOV",
     "ROAS": "ROAS",
+    "ROMI": "ROMI, %",
 }
 
 
 def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.DataFrame:
     """Агрегирует исходные метрики по группе и считает производные KPI."""
     aggregations = {}
-    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost", "revenue", "clicks_cost"):
+
+    for role in (
+        "displays",
+        "clicks",
+        "conversions",
+        "total_cost",
+        "placement_cost",
+        "revenue",
+        "clicks_cost",
+    ):
         col = mapping.get(role)
         if col and col in df.columns:
             aggregations[role] = (col, "sum")
@@ -193,54 +203,48 @@ def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.Da
 
     grouped = df.groupby(group_col, dropna=True).agg(**aggregations).reset_index()
 
+    cost_total = None
+    if "total_cost" in grouped:
+        cost_total = grouped["total_cost"]
+    elif "placement_cost" in grouped and "clicks_cost" in grouped:
+        cost_total = grouped["placement_cost"] + grouped["clicks_cost"]
+    elif "placement_cost" in grouped:
+        cost_total = grouped["placement_cost"]
+    elif "clicks_cost" in grouped:
+        cost_total = grouped["clicks_cost"]
+
     if "clicks" in grouped and "displays" in grouped:
         grouped["CTR"] = _safe_divide(grouped["clicks"], grouped["displays"]) * 100
 
-    cost_for_cpc = None
-    if "total_cost" in grouped:
-        cost_for_cpc = grouped["total_cost"]
-    elif "placement_cost" in grouped:
-        cost_for_cpc = grouped["placement_cost"]
-    if cost_for_cpc is not None and "clicks" in grouped:
-        grouped["CPC"] = _safe_divide(cost_for_cpc, grouped["clicks"])
+    if cost_total is not None and "clicks" in grouped:
+        grouped["CPC"] = _safe_divide(cost_total, grouped["clicks"])
 
     if "conversions" in grouped and "clicks" in grouped:
         grouped["CVR"] = _safe_divide(grouped["conversions"], grouped["clicks"]) * 100
 
-    cost_for_cpa = None
-    if "total_cost" in grouped:
-        cost_for_cpa = grouped["total_cost"]
-    elif "placement_cost" in grouped:
-        cost_for_cpa = grouped["placement_cost"]
-    if cost_for_cpa is not None and "conversions" in grouped:
-        grouped["CPA"] = _safe_divide(cost_for_cpa, grouped["conversions"])
+    if cost_total is not None and "conversions" in grouped:
+        grouped["CPA"] = _safe_divide(cost_total, grouped["conversions"])
 
-    cost_total_col = "total_cost" if "total_cost" in grouped else ("placement_cost" if "placement_cost" in grouped else None)
-    if cost_total_col is not None:
-        total = grouped[cost_total_col].sum(skipna=True)
-        if total and not pd.isna(total) and total > 0:
-            grouped["cost_share"] = grouped[cost_total_col] / total * 100
+    if cost_total is not None:
+        total_cost_sum = cost_total.sum(skipna=True)
+        if total_cost_sum and not pd.isna(total_cost_sum) and total_cost_sum > 0:
+            grouped["cost_share"] = cost_total / total_cost_sum * 100
 
     if "conversions" in grouped:
-        total = grouped["conversions"].sum(skipna=True)
-        if total and not pd.isna(total) and total > 0:
-            grouped["conv_share"] = grouped["conversions"] / total * 100
+        total_conv = grouped["conversions"].sum(skipna=True)
+        if total_conv and not pd.isna(total_conv) and total_conv > 0:
+            grouped["conv_share"] = grouped["conversions"] / total_conv * 100
 
     if "revenue" in grouped and "conversions" in grouped:
-        grouped["value_per_conversion"] = _safe_divide(grouped["revenue"], grouped["conversions"])
+        grouped["AOV"] = _safe_divide(grouped["revenue"], grouped["conversions"])
 
     if "revenue" in grouped:
-        cost_for_roas = None
-        if "total_cost" in grouped:
-            cost_for_roas = grouped["total_cost"]
-        elif "placement_cost" in grouped:
-            cost_for_roas = grouped["placement_cost"]
-        if cost_for_roas is not None:
-            grouped["ROAS"] = _safe_divide(grouped["revenue"], cost_for_roas)
-
         total_revenue = grouped["revenue"].sum(skipna=True)
         if total_revenue and not pd.isna(total_revenue) and total_revenue > 0:
             grouped["revenue_share"] = grouped["revenue"] / total_revenue * 100
+
+        if cost_total is not None:
+            grouped["ROAS"] = _safe_divide(grouped["revenue"], cost_total)
 
     return grouped
 
