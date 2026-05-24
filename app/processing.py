@@ -177,7 +177,6 @@ METRIC_LABELS = {
     "revenue_share": "Доля выручки, %",
     "value_per_conversion": "AOV",
     "ROAS": "ROAS",
-    "ROMI": "ROMI, %",
 }
 
 
@@ -402,10 +401,17 @@ def _build_extra_summary(
     mapping: dict,
     extra_col: str | None,
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """Строит агрегацию по дополнительной категории без разбивки по каналам.
+    """Сводка по дополнительной категории без разбивки по каналам.
 
-    Метрика для графика выбирается по приоритету:
-    conversions -> revenue -> clicks -> displays
+    В сводку попадают:
+    - базовые суммы: displays, clicks, conversions, total_cost, placement_cost, revenue
+    - KPI: CTR, CPC, CVR, CPA, AOV, ROAS
+    - доли: cost_share, conv_share, revenue_share
+
+    Возвращает:
+    - summary: DataFrame по extra_col
+    - extra_metric: ключевая метрика для extra-графика
+      (приоритет: conversions -> revenue -> clicks -> displays)
     """
     if not extra_col or extra_col not in df.columns:
         return None, None
@@ -414,19 +420,23 @@ def _build_extra_summary(
     if work.empty:
         return None, None
 
-    aggregations = {}
+    aggregations: dict[str, tuple[str, str]] = {}
+
     for role in (
         "displays",
         "clicks",
         "conversions",
-        "revenue",
         "total_cost",
         "placement_cost",
-        "clicks_cost",
+        "revenue",
     ):
         col = mapping.get(role)
         if col and col in work.columns:
             aggregations[role] = (col, "sum")
+
+    cpc_col = mapping.get("cpc")
+    if cpc_col and cpc_col in work.columns:
+        aggregations["cpc_avg"] = (cpc_col, "mean")
 
     if not aggregations:
         return None, None
@@ -436,6 +446,62 @@ def _build_extra_summary(
         .agg(**aggregations)
         .reset_index()
     )
+
+    if "clicks" in summary.columns and "displays" in summary.columns:
+        summary["CTR"] = _safe_divide(summary["clicks"], summary["displays"]) * 100
+
+    cost_for_cpc = None
+    if "total_cost" in summary.columns:
+        cost_for_cpc = summary["total_cost"]
+    elif "placement_cost" in summary.columns:
+        cost_for_cpc = summary["placement_cost"]
+
+    if cost_for_cpc is not None and "clicks" in summary.columns:
+        summary["CPC"] = _safe_divide(cost_for_cpc, summary["clicks"])
+    elif "cpc_avg" in summary.columns:
+        summary["CPC"] = summary["cpc_avg"]
+
+    if "conversions" in summary.columns and "clicks" in summary.columns:
+        summary["CVR"] = _safe_divide(summary["conversions"], summary["clicks"]) * 100
+
+    cost_for_cpa = None
+    if "total_cost" in summary.columns:
+        cost_for_cpa = summary["total_cost"]
+    elif "placement_cost" in summary.columns:
+        cost_for_cpa = summary["placement_cost"]
+
+    if cost_for_cpa is not None and "conversions" in summary.columns:
+        summary["CPA"] = _safe_divide(cost_for_cpa, summary["conversions"])
+
+    if "revenue" in summary.columns and "conversions" in summary.columns:
+        summary["AOV"] = _safe_divide(summary["revenue"], summary["conversions"])
+
+    if "revenue" in summary.columns:
+        if "total_cost" in summary.columns:
+            summary["ROAS"] = _safe_divide(summary["revenue"], summary["total_cost"])
+        elif "placement_cost" in summary.columns:
+            summary["ROAS"] = _safe_divide(summary["revenue"], summary["placement_cost"])
+
+    cost_total_col = None
+    if "total_cost" in summary.columns:
+        cost_total_col = "total_cost"
+    elif "placement_cost" in summary.columns:
+        cost_total_col = "placement_cost"
+
+    if cost_total_col is not None:
+        total_cost = summary[cost_total_col].sum(skipna=True)
+        if total_cost and not pd.isna(total_cost) and total_cost > 0:
+            summary["cost_share"] = summary[cost_total_col] / total_cost * 100
+
+    if "conversions" in summary.columns:
+        total_conv = summary["conversions"].sum(skipna=True)
+        if total_conv and not pd.isna(total_conv) and total_conv > 0:
+            summary["conv_share"] = summary["conversions"] / total_conv * 100
+
+    if "revenue" in summary.columns:
+        total_revenue = summary["revenue"].sum(skipna=True)
+        if total_revenue and not pd.isna(total_revenue) and total_revenue > 0:
+            summary["revenue_share"] = summary["revenue"] / total_revenue * 100
 
     extra_metric = None
     for metric in ("conversions", "revenue", "clicks", "displays"):
