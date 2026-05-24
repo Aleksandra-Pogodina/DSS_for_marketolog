@@ -159,10 +159,6 @@ class ResultsWindow(QWidget):
         self.docx_btn.clicked.connect(self.export_docx)
         layout.addWidget(self.docx_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        from app.main_window import ThemeToggleButton  # позднее, чтобы избежать циклов
-        self.theme_btn = ThemeToggleButton(self)
-        layout.addWidget(self.theme_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
         return layout
 
     def _build_kpi_strip(self) -> QHBoxLayout:

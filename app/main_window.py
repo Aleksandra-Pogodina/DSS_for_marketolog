@@ -187,9 +187,6 @@ class MainWindow(QMainWindow):
         self.header_status.setObjectName("Badge")
         layout.addWidget(self.header_status, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self.theme_btn = ThemeToggleButton(self)
-        layout.addWidget(self.theme_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
         return layout
 
     def _build_upload_card(self) -> QFrame:
@@ -510,11 +507,3 @@ class MainWindow(QMainWindow):
         self.results_window = ResultsWindow(result)
         self.results_window.showMaximized()
 
-    # ---------- тема --------------------------------------------------------
-
-    def on_theme_changed(self) -> None:
-        """Вызывается ThemeToggleButton после смены темы. Перекрашивает виджеты."""
-        self.style().polish(self)
-        if hasattr(self, "header_status"):
-            self.header_status.style().unpolish(self.header_status)
-            self.header_status.style().polish(self.header_status)
