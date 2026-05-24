@@ -374,24 +374,186 @@ class ResultsWindow(QWidget):
 
         edit = QTextEdit()
         edit.setReadOnly(True)
+        edit.setFrameShape(QFrame.Shape.NoFrame)
 
         pal = get_palette()
+
+        def split_level(text: str) -> tuple[str | None, str]:
+            text = (text or "").strip()
+            if text.startswith("[") and "]" in text:
+                level = text[1:text.index("]")].strip()
+                body = text[text.index("]") + 1:].strip()
+                return level, body
+            return None, text
+
+        def level_style(level: str | None) -> dict[str, str]:
+            if level == "Критично":
+                return {
+                    "accent": "#D95D39",
+                    "badge_bg": "#FCE9E3",
+                    "badge_fg": "#B5472A",
+                    "label": "Критично",
+                }
+            if level == "Важно":
+                return {
+                    "accent": "#D4A017",
+                    "badge_bg": "#FBF1D6",
+                    "badge_fg": "#9A7412",
+                    "label": "Важно",
+                }
+            return {
+                "accent": "#3B82F6",
+                "badge_bg": "#E8F1FE",
+                "badge_fg": "#2F67C7",
+                "label": "Наблюдение" if level else "Вывод",
+            }
+
         parts: list[str] = []
+
+        parts.append(
+            f"""
+            <div style="
+                margin-bottom: 16px;
+                padding: 10px 2px 14px 2px;
+                border-bottom: 1px solid {pal.border};
+                color: {pal.text};
+            ">
+                <div style="font-size: 16px; font-weight: 600; margin-bottom: 6px;">
+                    Аналитические выводы
+                </div>
+                <div style="font-size: 13px; color: {pal.text}; opacity: 0.78; line-height: 1.45;">
+                    Рекомендации отсортированы по уровню значимости: сначала критичные, затем важные, затем наблюдения.
+                </div>
+            </div>
+            """
+        )
+
         if self.result.recommendations:
-            parts.append(f"<h3 style='color:{pal.primary};margin-top:0'>Рекомендации</h3><ul>")
-            for r in self.result.recommendations:
-                parts.append(f"<li style='margin-bottom:8px;line-height:1.45'>{r}</li>")
-            parts.append("</ul>")
+            for rec in self.result.recommendations:
+                level, body = split_level(rec)
+                style = level_style(level)
+
+                parts.append(
+                    f"""
+                    <div style="
+                        margin-bottom: 12px;
+                        background: {pal.surface};
+                        border: 1px solid {pal.border};
+                        border-radius: 10px;
+                        overflow: hidden;
+                    ">
+                        <div style="
+                            display: flex;
+                            align-items: flex-start;
+                            gap: 12px;
+                            padding: 14px 16px;
+                        ">
+                            <div style="
+                                width: 4px;
+                                min-width: 4px;
+                                align-self: stretch;
+                                background: {style['accent']};
+                                border-radius: 999px;
+                            "></div>
+
+                            <div style="flex: 1;">
+                                <div style="margin-bottom: 8px;">
+                                    <span style="
+                                        display: inline-block;
+                                        padding: 3px 10px;
+                                        border-radius: 999px;
+                                        background: {style['badge_bg']};
+                                        color: {style['badge_fg']};
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        letter-spacing: 0.2px;
+                                    ">
+                                        {style['label']}
+                                    </span>
+                                </div>
+
+                                <div style="
+                                    color: {pal.text};
+                                    font-size: 14px;
+                                    line-height: 1.55;
+                                ">
+                                    {body}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    """
+                )
         else:
-            parts.append("<p>Рекомендации не сформированы.</p>")
+            parts.append(
+                f"""
+                <div style="
+                    padding: 14px 16px;
+                    background: {pal.surface};
+                    border: 1px solid {pal.border};
+                    border-radius: 10px;
+                    color: {pal.text};
+                    font-size: 14px;
+                    line-height: 1.5;
+                ">
+                    Рекомендации не сформированы.
+                </div>
+                """
+            )
 
         if self.result.warnings:
-            parts.append(f"<h3 style='color:{pal.warning};margin-top:14px'>Замечания и предупреждения</h3><ul>")
-            for w in self.result.warnings:
-                parts.append(f"<li style='margin-bottom:6px;color:{pal.warning}'>{w}</li>")
-            parts.append("</ul>")
+            warn_items = "".join(
+                f"""
+                <li style="margin-bottom: 6px; line-height: 1.5;">
+                    {w}
+                </li>
+                """
+                for w in self.result.warnings
+            )
 
-        edit.setHtml("\n".join(parts))
+            parts.append(
+                f"""
+                <div style="
+                    margin-top: 18px;
+                    padding: 14px 16px;
+                    background: {pal.surface};
+                    border: 1px solid {pal.border};
+                    border-radius: 10px;
+                    color: {pal.text};
+                ">
+                    <div style="
+                        font-size: 13px;
+                        font-weight: 600;
+                        margin-bottom: 8px;
+                        color: {pal.text};
+                    ">
+                        Предупреждения
+                    </div>
+                    <ul style="
+                        margin: 0;
+                        padding-left: 18px;
+                        color: {pal.text};
+                        font-size: 13px;
+                    ">
+                        {warn_items}
+                    </ul>
+                </div>
+                """
+            )
+
+        edit.setHtml(
+            f"""
+            <div style="
+                font-family: 'Segoe UI', 'Inter', 'Arial', sans-serif;
+                font-size: 14px;
+                color: {pal.text};
+                background: transparent;
+            ">
+                {''.join(parts)}
+            </div>
+            """
+        )
+
         layout.addWidget(edit)
         return widget
 
