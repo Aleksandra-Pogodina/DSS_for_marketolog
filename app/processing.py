@@ -672,12 +672,48 @@ def _top_bottom(metrics: pd.DataFrame, col: str, ascending=False):
     sorted_df = valid.sort_values(col, ascending=ascending)
     return sorted_df.iloc[0], sorted_df.iloc[-1]
 
+def _label_recommendation(level: str, text: str) -> str:
+    return f"[{level}] {text}"
+
+
+def _append_rec(target: list[str], level: str, text: str) -> None:
+    target.append(_label_recommendation(level, text))
+
+
+def _available_seg_col(df: pd.DataFrame, preferred: list[str]) -> str | None:
+    for col in preferred:
+        if col and col in df.columns:
+            return col
+    return None
+
+
+def _metric_leader(df: pd.DataFrame, seg_col: str, metric: str, ascending: bool = False):
+    if seg_col not in df.columns or metric not in df.columns:
+        return None
+    valid = df.dropna(subset=[seg_col, metric])
+    if valid.empty:
+        return None
+    valid = valid.sort_values(metric, ascending=ascending)
+    return valid.iloc[0]
+
+
+def _severity_by_gap(gap: float, high: float, medium: float) -> str:
+    if gap >= high:
+        return "Критично"
+    if gap >= medium:
+        return "Важно"
+    return "Наблюдение"
 
 def build_recommendations(
     metrics: pd.DataFrame,
     mapping: dict,
     group_col: str,
     group_label: str,
+    age_table: pd.DataFrame | None = None,
+    extra_summary: pd.DataFrame | None = None,
+    extra_category_col: str | None = None,
+    channel_col: str | None = None,
+    campaign_col: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Формирует рекомендации и предупреждения по доступным KPI."""
     recs: list[str] = []
@@ -696,38 +732,52 @@ def build_recommendations(
     if "CTR" in metrics.columns and metrics["CTR"].notna().any():
         best, worst = _top_bottom(metrics, "CTR", ascending=False)
         if best is not None:
-            recs.append(
+            _append_rec(
+                recs,
+                "Наблюдение",
                 f"Самый высокий CTR у сегмента «{seg_name(best)}» — {best['CTR']:.2f}%. "
-                f"Этот сегмент лучше других привлекает внимание и может служить ориентиром для дальнейшей работы."
+                f"Этот сегмент лучше других привлекает внимание."
             )
         if worst is not None and best is not None and seg_name(worst) != seg_name(best):
-            recs.append(
+            _append_rec(
+                recs,
+                "Важно",
                 f"Самый низкий CTR у сегмента «{seg_name(worst)}» — {worst['CTR']:.2f}%. "
-                f"Стоит проверить, насколько хорошо объявление и предложение совпадают с интересами аудитории."
+                f"Стоит проверить, насколько хорошо сообщение и предложение совпадают с ожиданиями аудитории."
             )
 
     if "CVR" in metrics.columns and metrics["CVR"].notna().any():
         best, worst = _top_bottom(metrics, "CVR", ascending=False)
         if best is not None:
-            recs.append(
+            _append_rec(
+                recs,
+                "Важно",
                 f"Самый высокий CVR у сегмента «{seg_name(best)}» — {best['CVR']:.2f}%. "
                 f"Этот сегмент лучше других превращает переходы в целевые действия."
             )
         if worst is not None and best is not None and seg_name(worst) != seg_name(best):
-            recs.append(
+            _append_rec(
+                recs,
+                "Важно",
                 f"Самый низкий CVR у сегмента «{seg_name(worst)}» — {worst['CVR']:.2f}%. "
-                f"Есть смысл проверить страницу после перехода, условия предложения и путь пользователя до целевого действия."
+                f"Есть смысл проверить страницу после перехода и путь пользователя до целевого действия."
             )
 
     if "CPA" in metrics.columns and metrics["CPA"].notna().any():
         best, worst = _top_bottom(metrics, "CPA", ascending=True)
         if best is not None:
-            recs.append(
+            _append_rec(
+                recs,
+                "Важно",
                 f"Самая низкая стоимость конверсии у сегмента «{seg_name(best)}» — "
                 f"{_format_value('CPA', best['CPA'])}. Этот сегмент выглядит наиболее эффективным по затратам."
             )
         if worst is not None and best is not None and seg_name(worst) != seg_name(best):
-            recs.append(
+            gap = float(worst["CPA"] / best["CPA"]) if best["CPA"] not in (0, np.nan) else 1.0
+            level = "Критично" if gap >= 2 else "Важно"
+            _append_rec(
+                recs,
+                level,
                 f"Самая высокая стоимость конверсии у сегмента «{seg_name(worst)}» — "
                 f"{_format_value('CPA', worst['CPA'])}. Стоит оценить, оправданы ли такие затраты результатом."
             )
@@ -735,8 +785,10 @@ def build_recommendations(
     if "CPC" in metrics.columns and metrics["CPC"].notna().any():
         cheapest, expensive = _top_bottom(metrics, "CPC", ascending=True)
         if cheapest is not None and expensive is not None and seg_name(cheapest) != seg_name(expensive):
-            recs.append(
-                f"Стоимость клика заметно различается между сегментами: от "
+            _append_rec(
+                recs,
+                "Наблюдение",
+                f"Стоимость клика различается между сегментами: от "
                 f"{_format_value('CPC', cheapest['CPC'])} у «{seg_name(cheapest)}» "
                 f"до {_format_value('CPC', expensive['CPC'])} у «{seg_name(expensive)}». "
                 f"Высокий CPC стоит оценивать вместе с CVR, CPA и ROAS."
@@ -745,25 +797,35 @@ def build_recommendations(
     if "ROAS" in metrics.columns and metrics["ROAS"].notna().any():
         best, worst = _top_bottom(metrics, "ROAS", ascending=False)
         if best is not None:
-            recs.append(
+            _append_rec(
+                recs,
+                "Важно",
                 f"Лучший ROAS у сегмента «{seg_name(best)}» — {_format_value('ROAS', best['ROAS'])}. "
                 f"Этот сегмент приносит наибольшую выручку на единицу затрат."
             )
         if worst is not None and best is not None and seg_name(worst) != seg_name(best):
-            recs.append(
+            ratio = float(best["ROAS"] / worst["ROAS"]) if worst["ROAS"] not in (0, np.nan) else 999.0
+            level = "Критично" if ratio >= 2 else "Важно"
+            _append_rec(
+                recs,
+                level,
                 f"Самый низкий ROAS у сегмента «{seg_name(worst)}» — {_format_value('ROAS', worst['ROAS'])}. "
-                f"Его вклад в выручку пока выглядит слабее по сравнению с вложениями."
+                f"Его вклад в выручку заметно слабее по сравнению с вложениями."
             )
 
     if "AOV" in metrics.columns and metrics["AOV"].notna().any():
         best, worst = _top_bottom(metrics, "AOV", ascending=False)
         if best is not None:
-            recs.append(
+            _append_rec(
+                recs,
+                "Наблюдение",
                 f"Самый высокий средний доход на конверсию у сегмента «{seg_name(best)}» — "
                 f"{_format_value('AOV', best['AOV'])}. Даже при умеренном количестве конверсий такой сегмент может быть ценным."
             )
         if worst is not None and best is not None and seg_name(worst) != seg_name(best):
-            recs.append(
+            _append_rec(
+                recs,
+                "Наблюдение",
                 f"Самый низкий средний доход на конверсию у сегмента «{seg_name(worst)}» — "
                 f"{_format_value('AOV', worst['AOV'])}. Стоит проверить, отличаются ли результаты этого сегмента по качеству."
             )
@@ -773,14 +835,22 @@ def build_recommendations(
 
         overspend = metrics[(diff > 10) & metrics["cost_share"].notna() & metrics["conv_share"].notna()]
         for _, row in overspend.iterrows():
-            recs.append(
+            gap = float(row["cost_share"] - row["conv_share"])
+            level = _severity_by_gap(gap, high=20, medium=10)
+            _append_rec(
+                recs,
+                level,
                 f"Сегмент «{seg_name(row)}» получает {row['cost_share']:.1f}% бюджета, "
                 f"но даёт только {row['conv_share']:.1f}% конверсий. Расходы по нему выглядят завышенными."
             )
 
         underfunded = metrics[(diff < -10) & metrics["cost_share"].notna() & metrics["conv_share"].notna()]
         for _, row in underfunded.iterrows():
-            recs.append(
+            gap = float(row["conv_share"] - row["cost_share"])
+            level = _severity_by_gap(gap, high=20, medium=10)
+            _append_rec(
+                recs,
+                level,
                 f"Сегмент «{seg_name(row)}» даёт {row['conv_share']:.1f}% конверсий "
                 f"при доле бюджета {row['cost_share']:.1f}%. Это сильный кандидат на увеличение доли бюджета."
             )
@@ -790,18 +860,27 @@ def build_recommendations(
 
         overspend_rev = metrics[(diff > 10) & metrics["cost_share"].notna() & metrics["revenue_share"].notna()]
         for _, row in overspend_rev.iterrows():
-            recs.append(
+            gap = float(row["cost_share"] - row["revenue_share"])
+            level = _severity_by_gap(gap, high=20, medium=10)
+            _append_rec(
+                recs,
+                level,
                 f"Сегмент «{seg_name(row)}» использует {row['cost_share']:.1f}% затрат, "
-                f"но формирует только {row['revenue_share']:.1f}% выручки. Его вклад в результат ниже вложений."
+                f"но формирует только {row['revenue_share']:.1f}% выручки. Его вклад в итоговый результат ниже вложений."
             )
 
         efficient_rev = metrics[(diff < -10) & metrics["cost_share"].notna() & metrics["revenue_share"].notna()]
         for _, row in efficient_rev.iterrows():
-            recs.append(
+            gap = float(row["revenue_share"] - row["cost_share"])
+            level = _severity_by_gap(gap, high=20, medium=10)
+            _append_rec(
+                recs,
+                level,
                 f"Сегмент «{seg_name(row)}» обеспечивает {row['revenue_share']:.1f}% выручки "
                 f"при {row['cost_share']:.1f}% затрат. Его стоит рассмотреть как приоритетный."
             )
 
+    # --- составные выводы ---
     if {"CTR", "CVR"}.issubset(metrics.columns):
         valid = metrics.dropna(subset=["CTR", "CVR"])
         if not valid.empty:
@@ -810,16 +889,131 @@ def build_recommendations(
 
             strong_click_weak_result = valid[(valid["CTR"] > mean_ctr) & (valid["CVR"] < mean_cvr * 0.8)]
             for _, row in strong_click_weak_result.iterrows():
-                recs.append(
+                _append_rec(
+                    recs,
+                    "Важно",
                     f"У сегмента «{seg_name(row)}» CTR выше среднего ({row['CTR']:.2f}%), "
-                    f"но CVR остаётся низким ({row['CVR']:.2f}%). Это означает, что интерес есть, а итоговый результат после перехода слабее ожидаемого."
+                    f"но CVR остаётся низким ({row['CVR']:.2f}%). Интерес к предложению есть, но итоговый результат после перехода слабее ожидаемого."
                 )
 
             weak_click_good_result = valid[(valid["CTR"] < mean_ctr * 0.7) & (valid["CVR"] >= mean_cvr)]
             for _, row in weak_click_good_result.iterrows():
-                recs.append(
+                _append_rec(
+                    recs,
+                    "Наблюдение",
                     f"У сегмента «{seg_name(row)}» CTR ниже среднего ({row['CTR']:.2f}%), "
-                    f"но CVR находится на хорошем уровне ({row['CVR']:.2f}%). Такой сегмент может расти, если увеличить объём качественного трафика."
+                    f"но CVR находится на хорошем уровне ({row['CVR']:.2f}%). При росте объёма качественных переходов результат может улучшиться."
+                )
+
+    if {"CPC", "CPA"}.issubset(metrics.columns):
+        valid = metrics.dropna(subset=["CPC", "CPA"])
+        if not valid.empty:
+            mean_cpc = valid["CPC"].mean()
+            mean_cpa = valid["CPA"].mean()
+
+            bad_combo = valid[(valid["CPC"] < mean_cpc) & (valid["CPA"] > mean_cpa)]
+            for _, row in bad_combo.iterrows():
+                _append_rec(
+                    recs,
+                    "Важно",
+                    f"У сегмента «{seg_name(row)}» стоимость клика ниже средней, "
+                    f"но стоимость конверсии остаётся высокой ({_format_value('CPA', row['CPA'])}). "
+                    f"Проблема, вероятно, возникает не на этапе привлечения переходов, а позже."
+                )
+
+    if {"ROAS", "cost_share"}.issubset(metrics.columns):
+        valid = metrics.dropna(subset=["ROAS", "cost_share"])
+        if not valid.empty:
+            mean_roas = valid["ROAS"].mean()
+            high_budget_low_roas = valid[(valid["cost_share"] > 20) & (valid["ROAS"] < mean_roas)]
+            for _, row in high_budget_low_roas.iterrows():
+                _append_rec(
+                    recs,
+                    "Критично",
+                    f"Сегмент «{seg_name(row)}» использует заметную долю бюджета ({row['cost_share']:.1f}%), "
+                    f"но его ROAS ({_format_value('ROAS', row['ROAS'])}) ниже среднего. Этот сегмент стоит проверить в первую очередь."
+                )
+
+    # --- выводы по возрасту ---
+    if age_table is not None and not age_table.empty:
+        age_seg_col = _available_seg_col(age_table, [campaign_col, channel_col, group_col, "Возрастная группа"])
+        if age_seg_col:
+            if "ROAS" in age_table.columns:
+                leader = _metric_leader(age_table, "Возрастная группа", "ROAS", ascending=False)
+                if leader is not None:
+                    _append_rec(
+                        recs,
+                        "Важно",
+                        f"Среди возрастных групп лучший ROAS у категории «{leader['Возрастная группа']}» "
+                        f"— {_format_value('ROAS', leader['ROAS'])}. Эту аудиторию стоит рассматривать как одну из наиболее результативных."
+                    )
+
+            elif "CVR" in age_table.columns:
+                leader = _metric_leader(age_table, "Возрастная группа", "CVR", ascending=False)
+                if leader is not None:
+                    _append_rec(
+                        recs,
+                        "Важно",
+                        f"Среди возрастных групп лучший CVR у категории «{leader['Возрастная группа']}» "
+                        f"— {leader['CVR']:.2f}%. Эта аудитория лучше других доходит до целевого действия."
+                    )
+
+            if {"cost_share", "conv_share"}.issubset(age_table.columns):
+                age_diff = age_table["cost_share"] - age_table["conv_share"]
+                problematic = age_table[
+                    (age_diff > 10)
+                    & age_table["cost_share"].notna()
+                    & age_table["conv_share"].notna()
+                ]
+                for _, row in problematic.iterrows():
+                    level = _severity_by_gap(float(row["cost_share"] - row["conv_share"]), 20, 10)
+                    _append_rec(
+                        recs,
+                        level,
+                        f"Возрастная группа «{row['Возрастная группа']}» использует {row['cost_share']:.1f}% затрат, "
+                        f"но даёт только {row['conv_share']:.1f}% конверсий. Для неё стоит проверить целесообразность текущего объёма вложений."
+                    )
+
+    # --- выводы по доп. категории ---
+    if (
+        extra_summary is not None
+        and not extra_summary.empty
+        and extra_category_col
+        and extra_category_col in extra_summary.columns
+    ):
+        if "ROAS" in extra_summary.columns:
+            leader = _metric_leader(extra_summary, extra_category_col, "ROAS", ascending=False)
+            if leader is not None:
+                _append_rec(
+                    recs,
+                    "Наблюдение",
+                    f"По дополнительной категории «{extra_category_col}» лучший ROAS у значения "
+                    f"«{leader[extra_category_col]}» — {_format_value('ROAS', leader['ROAS'])}."
+                )
+        elif "CVR" in extra_summary.columns:
+            leader = _metric_leader(extra_summary, extra_category_col, "CVR", ascending=False)
+            if leader is not None:
+                _append_rec(
+                    recs,
+                    "Наблюдение",
+                    f"По дополнительной категории «{extra_category_col}» лучший CVR у значения "
+                    f"«{leader[extra_category_col]}» — {leader['CVR']:.2f}%."
+                )
+
+        if {"cost_share", "conv_share"}.issubset(extra_summary.columns):
+            extra_diff = extra_summary["cost_share"] - extra_summary["conv_share"]
+            bad_extra = extra_summary[
+                (extra_diff > 10)
+                & extra_summary["cost_share"].notna()
+                & extra_summary["conv_share"].notna()
+            ]
+            for _, row in bad_extra.iterrows():
+                level = _severity_by_gap(float(row["cost_share"] - row["conv_share"]), 20, 10)
+                _append_rec(
+                    recs,
+                    level,
+                    f"Значение «{row[extra_category_col]}» в категории «{extra_category_col}» "
+                    f"получает {row['cost_share']:.1f}% затрат, но даёт только {row['conv_share']:.1f}% конверсий."
                 )
 
     needed = {
@@ -840,12 +1034,16 @@ def build_recommendations(
 
     if not recs:
         recs.append(
-            "Имеющихся данных пока недостаточно для содержательных выводов. "
+            "[Наблюдение] Имеющихся данных пока недостаточно для содержательных выводов. "
             "Добавьте показы, клики, конверсии, затраты и выручку, чтобы рекомендации стали точнее."
         )
 
     recs = list(dict.fromkeys(recs))
     warns = list(dict.fromkeys(warns))
+
+    priority_order = {"Критично": 0, "Важно": 1, "Наблюдение": 2}
+    recs.sort(key=lambda x: priority_order.get(x.split("]")[0].strip("["), 99))
+
     return recs, warns
 
 
@@ -864,9 +1062,9 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
 
     if channel_col and campaign_col:
         group_col = _COMBO_KEY
-        # Видимый сегмент — это «канал в кампании», без слова «группа».
-        # Для подписей в графиках используются отдельные channel_col/campaign_col.
-        work[group_col] = work[channel_col].astype(str) + " · " + work[campaign_col].astype(str)
+        work[group_col] = (
+            work[channel_col].astype(str) + " · " + work[campaign_col].astype(str)
+        )
         group_label = "Канал и кампания"
     elif channel_col:
         group_col = channel_col
@@ -883,15 +1081,14 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
             "Выберите хотя бы одно числовое поле: показы, клики, конверсии или стоимость."
         )
 
-    # Для красивых многоуровневых меток в графиках сохраним столбцы канала и кампании
+    # Для красивых подписей в графиках сохраним исходные столбцы канала и кампании
     # рядом с агрегированными метриками.
     if channel_col and campaign_col:
-        labels_df = work[[group_col, channel_col, campaign_col]].drop_duplicates(group_col)
+        labels_df = work[[group_col, channel_col, campaign_col]].drop_duplicates(subset=[group_col])
         metrics = metrics.merge(labels_df, on=group_col, how="left")
 
-    for sort_col in ("conversions", "clicks", "displays", "total_cost"):
+    for sort_col in ("conversions", "revenue", "clicks", "displays", "total_cost", "placement_cost"):
         if sort_col in metrics.columns and metrics[sort_col].notna().any():
-            # При двух размерностях группируем по кампании, чтобы каналы кампании шли подряд
             if channel_col and campaign_col:
                 metrics = metrics.sort_values(
                     [campaign_col, channel_col],
@@ -901,13 +1098,11 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
                 metrics = metrics.sort_values(sort_col, ascending=False).reset_index(drop=True)
             break
 
-
-
     available = [
         c for c in metrics.columns
         if c not in {group_col, channel_col, campaign_col} and c is not None
     ]
-    recommendations, warnings = build_recommendations(metrics, mapping, group_col, group_label)
+
     age_table, age_metric = _build_age_table(
         work,
         mapping,
@@ -915,6 +1110,7 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         channel_col,
         campaign_col,
     )
+
     month_table = _build_month_table(
         work,
         mapping,
@@ -922,9 +1118,24 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         channel_col=channel_col,
         campaign_col=campaign_col,
     )
-    extra_summary, extra_metric = _build_extra_summary(work, mapping, extra_col)
 
-    month_table = _build_month_table(work, mapping, group_col, channel_col, campaign_col)
+    extra_summary, extra_metric = _build_extra_summary(
+        work,
+        mapping,
+        extra_col,
+    )
+
+    recommendations, warnings = build_recommendations(
+        metrics,
+        mapping,
+        group_col,
+        group_label,
+        age_table=age_table,
+        extra_summary=extra_summary,
+        extra_category_col=extra_col,
+        channel_col=channel_col,
+        campaign_col=campaign_col,
+    )
 
     return AnalysisResult(
         mapping=mapping,
@@ -939,6 +1150,7 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         recommendations=recommendations,
         warnings=warnings,
         age_table=age_table,
+        age_metric=age_metric,
         month_table=month_table,
         rows_loaded=len(work),
         rows_dropped=len(dropped),
@@ -948,7 +1160,6 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         extra_category_label=str(extra_col) if extra_col else None,
         extra_summary=extra_summary,
         extra_metric=extra_metric,
-        age_metric=age_metric,
     )
 
 
