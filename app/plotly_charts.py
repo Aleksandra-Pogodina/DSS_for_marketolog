@@ -34,6 +34,17 @@ _BASE_LAYOUT = dict(
 
 _FUNNEL_LABELS = {"displays": "Показы", "clicks": "Клики", "conversions": "Конверсии"}
 
+def _series_colors() -> tuple[tuple[str, str], ...]:
+    return (
+        ("displays", "#0F766E"),
+        ("clicks", "#2563EB"),
+        ("conversions", "#059669"),
+        ("CTR", "#B45309"),
+        ("CVR", "#7C3AED"),
+        ("CPC", "#DC2626"),
+        ("CPA", "#BE185D"),
+    )
+
 
 def _funnel_title(cols: list[str]) -> str:
     names = [_FUNNEL_LABELS[c] for c in cols]
@@ -1679,18 +1690,19 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     specs: list[PlotlySpec] = []
 
     # ---------- месячные графики ----------
-    # Если выбраны и каналы, и кампании, то месячные линейные графики
-    # строим по одной метрике: внутри такого графика уже есть переключение по каналу.
-    # Иначе оставляем 2 обзорных monthly combo-графика.
-    if result.channel_col and result.campaign_col:
+    # Если выбран канал (с кампаниями или без), то строим отдельный месячный график
+    # для каждой метрики. Если при этом выбраны и кампании, переключение по каналу
+    # обрабатывается внутри _month_single_metric_chart().
+    # Если каналов нет, оставляем старые 2 обзорных monthly combo-графика.
+    if result.channel_col:
         for metric, color in (
-            ("displays", "#88CCEE"),
-            ("clicks", "#4477AA"),
-            ("conversions", "#117733"),
-            ("CTR", "#882255"),
-            ("CVR", "#AA4499"),
-            ("CPC", "#DDCC77"),
-            ("CPA", "#999933"),
+            ("displays", "#0F766E"),
+            ("clicks", "#2563EB"),
+            ("conversions", "#059669"),
+            ("CTR", "#B45309"),
+            ("CVR", "#7C3AED"),
+            ("CPC", "#DC2626"),
+            ("CPA", "#BE185D"),
         ):
             spec = _month_single_metric_chart(result, metric, color)
             if spec is not None:
@@ -1723,14 +1735,14 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
 
     # ---------- ranking / detail ----------
     for col, color in (
-        ("conversions", "#117733"),
-        ("clicks", "#4477AA"),
-        ("displays", "#88CCEE"),
+        ("conversions", "#059669"),
+        ("clicks", "#2563EB"),
+        ("displays", "#0F766E"),
         ("total_cost", "#CC6677"),
-        ("CTR", "#882255"),
-        ("CVR", "#AA4499"),
-        ("CPA", "#999933"),
-        ("CPC", "#DDCC77"),
+        ("CTR", "#B45309"),
+        ("CVR", "#7C3AED"),
+        ("CPA", "#BE185D"),
+        ("CPC", "#DC2626"),
     ):
         if col not in result.metrics.columns:
             continue
