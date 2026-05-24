@@ -1470,56 +1470,64 @@ def _age_chart(result: AnalysisResult) -> PlotlySpec | None:
 
 
 def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
-    """Графики по дополнительной категории (например, пол / категория покупки)."""
+    """График по дополнительной категории без разбивки по каналам."""
     es = result.extra_summary
     if es is None or es.empty or not result.extra_metric:
         return None
+
     cat_col = result.extra_category_col
     metric = result.extra_metric
     if cat_col not in es.columns or metric not in es.columns:
         return None
 
     pretty_metric = result.metric_labels.get(metric, metric)
-    chan_col = result.channel_col if result.channel_col and result.channel_col in es.columns else None
 
-    if chan_col:
-        pivot = es.pivot_table(index=cat_col, columns=chan_col, values=metric,
-                               aggfunc="sum", fill_value=0)
-        # упорядочим категории по суммарному значению
-        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
-        fig = go.Figure()
-        for ch in pivot.columns:
-            fig.add_trace(go.Bar(
-                x=pivot.index.astype(str),
-                y=pivot[ch].astype(float),
-                name=_truncate(ch, 28),
-                hovertemplate=f"<b>%{{x}}</b><br>{ch}<br>{pretty_metric}: %{{y:,.0f}}<extra></extra>",
-            ))
-        fig.update_layout(
-            **_BASE_LAYOUT, barmode="group",
-            xaxis_title=str(cat_col), yaxis_title=pretty_metric,
-        )
-        title = f"{pretty_metric}: {cat_col} × Каналы"
-        desc = (
-            f"Сравнение значений «{pretty_metric}» по дополнительной категории "
-            f"«{cat_col}» в разрезе каналов. Скрывайте каналы через легенду."
-        )
-    else:
-        data = es.groupby(cat_col, dropna=True)[metric].sum().sort_values(ascending=False)
-        fig = go.Figure(go.Bar(
-            x=data.index.astype(str),
-            y=data.values.astype(float),
+    data = (
+        es[[cat_col, metric]]
+        .dropna(subset=[metric])
+        .sort_values(metric, ascending=False)
+        .copy()
+    )
+    if data.empty:
+        return None
+
+    fig = go.Figure(
+        go.Bar(
+            x=data[cat_col].astype(str),
+            y=data[metric].astype(float),
             marker_color="#1c8f9e",
-            hovertemplate="<b>%{x}</b><br>" + pretty_metric + ": %{y:,.0f}<extra></extra>",
-        ))
-        fig.update_layout(
-            **{**_BASE_LAYOUT, "legend": dict(visible=False)},
-            xaxis_title=str(cat_col), yaxis_title=pretty_metric,
+            hovertemplate=(
+                "%{x}<br>"
+                f"{pretty_metric}: " +
+                ("%{y:.2f}" if metric in {"CTR", "CVR", "CPC", "CPA", "ROAS", "AOV"} else "%{y:,.0f}") +
+                "<extra></extra>"
+            ),
         )
-        title = f"{pretty_metric} по «{cat_col}»"
-        desc = f"Суммарное значение «{pretty_metric}» по дополнительной категории «{cat_col}»."
+    )
 
-    return PlotlySpec(title=title, html=_to_html(fig, title), description=desc)
+    title = f"{pretty_metric} по {cat_col}"
+
+    layout = dict(_BASE_LAYOUT)
+    layout["title"] = dict(text=title, x=0.02, xanchor="left")
+    layout["showlegend"] = False
+    layout["xaxis"] = dict(
+        title=str(cat_col),
+        tickangle=-35,
+        automargin=True,
+    )
+    layout["yaxis"] = dict(
+        title=pretty_metric,
+        rangemode="tozero",
+    )
+    layout["margin"] = dict(l=60, r=30, t=70, b=120)
+
+    fig.update_layout(layout)
+
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description=f"Сравнение значений категории «{cat_col}» по метрике «{pretty_metric}».",
+    )
 
 
 def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
@@ -1715,10 +1723,6 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     specs: list[PlotlySpec] = []
 
     # ---------- месячные графики ----------
-    # Если выбран канал (с кампаниями или без), то строим отдельный месячный график
-    # для каждой метрики. Если при этом выбраны и кампании, переключение по каналу
-    # обрабатывается внутри _month_single_metric_chart().
-    # Если каналов нет, оставляем старые 2 обзорных monthly combo-графика.
     if result.channel_col:
         for metric, color in (
             ("displays", "#0F766E"),
@@ -1754,7 +1758,12 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     if share_compare is not None:
         specs.append(share_compare)
 
-    # Если уже есть общий funnel по базовым метрикам, не дублируем их ranking-графиками.
+    # ---------- график по доп. категории ----------
+    extra = _extra_category_chart(result)
+    if extra is not None:
+        specs.append(extra)
+
+    # Если уже есть общий график по базовым метрикам, не дублируем их ranking-графиками.
     combined_funnel_metrics = {
         col
         for col in ("displays", "clicks", "conversions")

@@ -400,42 +400,54 @@ def _pick_key_metric(mapping: dict) -> tuple[str | None, str | None]:
 def _build_extra_summary(
     df: pd.DataFrame,
     mapping: dict,
-    extra_col: str,
-    channel_col: str | None,
+    extra_col: str | None,
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """Сводка по дополнительной категории и (если выбран) по каналу.
+    """Строит агрегацию по дополнительной категории без разбивки по каналам.
 
-    Возвращает (DataFrame с категорией × каналом и числовыми суммами, имя ключевой метрики).
-    Если категория или нужные числовые столбцы отсутствуют — None.
+    Метрика для графика выбирается по приоритету:
+    conversions -> revenue -> clicks -> displays
     """
     if not extra_col or extra_col not in df.columns:
-        return None, None
-
-    key_role, _ = _pick_key_metric(mapping)
-    if key_role is None:
         return None, None
 
     work = df.dropna(subset=[extra_col]).copy()
     if work.empty:
         return None, None
 
-    aggregations: dict = {}
-    for role in ("displays", "clicks", "conversions", "total_cost", "placement_cost"):
+    aggregations = {}
+    for role in (
+        "displays",
+        "clicks",
+        "conversions",
+        "revenue",
+        "total_cost",
+        "placement_cost",
+        "clicks_cost",
+    ):
         col = mapping.get(role)
         if col and col in work.columns:
             aggregations[role] = (col, "sum")
+
     if not aggregations:
         return None, None
 
-    group_cols = [extra_col] + ([channel_col] if channel_col else [])
-    summary = work.groupby(group_cols, dropna=True).agg(**aggregations).reset_index()
+    summary = (
+        work.groupby(extra_col, dropna=True)
+        .agg(**aggregations)
+        .reset_index()
+    )
 
-    if "clicks" in summary and "displays" in summary:
-        summary["CTR"] = _safe_divide(summary["clicks"], summary["displays"]) * 100
-    if "conversions" in summary and "clicks" in summary:
-        summary["CVR"] = _safe_divide(summary["conversions"], summary["clicks"]) * 100
+    extra_metric = None
+    for metric in ("conversions", "revenue", "clicks", "displays"):
+        if metric in summary.columns and summary[metric].notna().any():
+            extra_metric = metric
+            break
 
-    return summary, key_role
+    if extra_metric is None:
+        return None, None
+
+    summary = summary.sort_values(extra_metric, ascending=False).reset_index(drop=True)
+    return summary, extra_metric
 
 
 # ---------- рекомендации (DSS) ----------------------------------------------
@@ -640,7 +652,7 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         channel_col=channel_col,
         campaign_col=campaign_col,
     )
-    extra_summary, extra_metric = _build_extra_summary(work, mapping, extra_col, channel_col)
+    extra_summary, extra_metric = _build_extra_summary(work, mapping, extra_col)
 
     month_table = _build_month_table(work, mapping, group_col, channel_col, campaign_col)
 
