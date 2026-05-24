@@ -239,14 +239,48 @@ class ResultsWindow(QWidget):
 
     def _format_extra_summary(self) -> pd.DataFrame:
         es = self.result.extra_summary.copy()
+        print("EXTRA ORDER FIX APPLIED", list(es.columns))
+        cat_col = self.result.extra_category_col
+
+        metric_order = [
+            "displays",
+            "clicks",
+            "conversions",
+            "revenue",
+            "total_cost",
+            "placement_cost",
+            "cpc_avg",
+            "CTR",
+            "CPC",
+            "CVR",
+            "CPA",
+            "AOV",
+            "ROAS",
+            "cost_share",
+            "conv_share",
+            "revenue_share",
+        ]
+
+        front_cols = [c for c in [cat_col] if c and c in es.columns]
+        ordered_metrics = [c for c in metric_order if c in es.columns]
+        other_cols = [c for c in es.columns if c not in front_cols + ordered_metrics]
+
+        es = es[front_cols + ordered_metrics + other_cols]
+
         rename = {}
+        if cat_col and cat_col in es.columns:
+            rename[cat_col] = str(cat_col)
+
         for raw, label in self.result.metric_labels.items():
             if raw in es.columns:
                 rename[raw] = label
+
         es = es.rename(columns=rename)
+
         for c in es.columns:
             if pd.api.types.is_numeric_dtype(es[c]):
                 es[c] = es[c].round(2)
+
         return es
 
     def _make_dataframe_tab(self, df: pd.DataFrame) -> QWidget:

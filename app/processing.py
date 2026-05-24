@@ -48,6 +48,7 @@ class AnalysisResult:
     extra_category_label: str | None = None
     extra_summary: pd.DataFrame | None = None
     extra_metric: str | None = None  # ключевая метрика для extra-графика
+    age_metric: str | None = None
 
 
 # ---------- очистка ----------------------------------------------------------
@@ -248,34 +249,68 @@ def _compute_per_group(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.Da
     return grouped
 
 
-def _build_age_table(df: pd.DataFrame, mapping: dict, group_col: str) -> pd.DataFrame | None:
+def _build_age_table(
+    df: pd.DataFrame,
+    mapping: dict,
+    group_col: str,
+    channel_col: str | None,
+    campaign_col: str | None,
+) -> tuple[pd.DataFrame | None, str | None]:
     age_col = mapping.get("age")
     if not age_col or age_col not in df.columns:
-        return None
+        return None, None
+
     age_series = _safe_to_numeric(df[age_col])
     if age_series.notna().sum() == 0:
-        return None
-    work = df.copy()
-    work["__age_group__"] = pd.cut(age_series, bins=AGE_BINS, labels=AGE_LABELS, include_lowest=True)
+        return None, None
 
-    parts = []
-    for role in ("clicks", "conversions", "total_cost", "placement_cost"):
+    work = df.copy()
+    work["__age_group__"] = pd.cut(
+        age_series,
+        bins=AGE_BINS,
+        labels=AGE_LABELS,
+        include_lowest=True,
+    )
+
+    group_fields = ["__age_group__"]
+    if campaign_col and campaign_col in work.columns:
+        group_fields.append(campaign_col)
+    if channel_col and channel_col in work.columns:
+        group_fields.append(channel_col)
+
+    if len(group_fields) == 1 and group_col in work.columns:
+        group_fields.append(group_col)
+
+    aggregations: dict[str, tuple[str, str]] = {}
+    for role in ("displays", "clicks", "conversions", "revenue", "total_cost", "placement_cost"):
         col = mapping.get(role)
         if col and col in work.columns:
-            parts.append((role, col))
+            aggregations[role] = (col, "sum")
 
-    if not parts:
-        result = work.groupby(["__age_group__", group_col], dropna=True, observed=True).size().reset_index(name="Записей")
-    else:
-        agg = {role: (col, "sum") for role, col in parts}
+    if not aggregations:
         result = (
-            work.groupby(["__age_group__", group_col], dropna=True, observed=True)
-            .agg(**agg)
-            .reset_index()
+            work.groupby(group_fields, dropna=True, observed=True)
+            .size()
+            .reset_index(name="Записей")
         )
+        result = result.rename(columns={"__age_group__": "Возрастная группа"})
+        return result, None
+
+    result = (
+        work.groupby(group_fields, dropna=True, observed=True)
+        .agg(**aggregations)
+        .reset_index()
+    )
 
     result = result.rename(columns={"__age_group__": "Возрастная группа"})
-    return result
+
+    age_metric = None
+    for metric in ("conversions", "revenue", "clicks", "displays"):
+        if metric in result.columns and result[metric].notna().any():
+            age_metric = metric
+            break
+
+    return result, age_metric
 
 def _build_month_table(
     df: pd.DataFrame,
@@ -710,7 +745,13 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         if c not in {group_col, channel_col, campaign_col} and c is not None
     ]
     recommendations, warnings = build_recommendations(metrics, mapping, group_col, group_label)
-    age_table = _build_age_table(work, mapping, group_col)
+    age_table, age_metric = _build_age_table(
+        work,
+        mapping,
+        group_col,
+        channel_col,
+        campaign_col,
+    )
     month_table = _build_month_table(
         work,
         mapping,
@@ -744,6 +785,7 @@ def process_data(df: pd.DataFrame, mapping: dict) -> AnalysisResult:
         extra_category_label=str(extra_col) if extra_col else None,
         extra_summary=extra_summary,
         extra_metric=extra_metric,
+        age_metric=age_metric,
     )
 
 

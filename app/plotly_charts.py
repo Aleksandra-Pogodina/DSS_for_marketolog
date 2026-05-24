@@ -14,7 +14,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
-from app.processing import AnalysisResult
+from app.processing import AnalysisResult, AGE_LABELS
 
 
 @dataclass
@@ -1436,36 +1436,146 @@ def _age_chart(result: AnalysisResult) -> PlotlySpec | None:
     age_table = result.age_table
     if age_table is None or age_table.empty:
         return None
-    value_col = None
-    for cand in ("conversions", "clicks", "Записей"):
-        if cand in age_table.columns:
-            value_col = cand
-            break
-    if value_col is None:
+
+    metric = result.age_metric
+    if not metric or metric not in age_table.columns:
         return None
+
+    age_col = "Возрастная группа"
+    pretty_metric = result.metric_labels.get(metric, metric)
+
+    has_campaign_channel = bool(result.campaign_col and result.channel_col)
+    if has_campaign_channel and (
+        result.campaign_col in age_table.columns and result.channel_col in age_table.columns
+    ):
+        channels = (
+            age_table[result.channel_col]
+            .dropna()
+            .astype(str)
+            .drop_duplicates()
+            .tolist()
+        )
+        if not channels:
+            return None
+
+        fig = go.Figure()
+        trace_channel_map: list[str] = []
+
+        for ch in channels:
+            ch_df = age_table[age_table[result.channel_col].astype(str) == ch].copy()
+            campaigns = (
+                ch_df[result.campaign_col]
+                .dropna()
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+
+            for camp in campaigns:
+                sub = ch_df[ch_df[result.campaign_col].astype(str) == camp].copy()
+                series = (
+                    sub.groupby(age_col, dropna=True, observed=True)[metric]
+                    .sum()
+                    .reindex(AGE_LABELS, fill_value=0)
+                )
+
+                fig.add_trace(
+                    go.Bar(
+                        x=series.index.astype(str),
+                        y=series.values.astype(float),
+                        name=_truncate(camp, 28),
+                        visible=(ch == channels[0]),
+                        hovertemplate=(
+                            f"Канал: {ch}<br>"
+                            f"Кампания: {camp}<br>"
+                            "Возраст: %{x}<br>"
+                            f"{pretty_metric}: " +
+                            ("%{y:.2f}" if metric in {"CTR", "CVR", "CPC", "CPA", "ROAS", "AOV"} else "%{y:,.0f}") +
+                            "<extra></extra>"
+                        ),
+                    )
+                )
+                trace_channel_map.append(ch)
+
+        buttons = []
+        for ch in channels:
+            visible = [trace_ch == ch for trace_ch in trace_channel_map]
+            buttons.append(
+                dict(
+                    label=str(ch),
+                    method="update",
+                    args=[
+                        {"visible": visible},
+                        {}
+                    ],
+                )
+            )
+
+        fig.update_layout(
+            _BASE_LAYOUT,
+            barmode="group",
+            xaxis_title="Возрастная группа",
+            yaxis_title=pretty_metric,
+            margin=dict(l=60, r=30, t=70, b=110),
+            updatemenus=[
+                dict(
+                    buttons=buttons,
+                    direction="down",
+                    showactive=True,
+                    x=0.0,
+                    xanchor="left",
+                    y=1.16,
+                    yanchor="top",
+                    pad=dict(r=8, t=0),
+                )
+            ],
+        )
+
+        return PlotlySpec(
+            title=f"{pretty_metric} по возрастным группам",
+            html=_to_html(fig, f"{pretty_metric} по возрастным группам"),
+            description="Сравнение кампаний по возрастным группам с переключением по каналам.",
+        )
+
     pivot = age_table.pivot_table(
-        index="Возрастная группа", columns=result.group_col, values=value_col,
-        aggfunc="sum", fill_value=0, observed=True,
+        index=age_col,
+        columns=result.group_col,
+        values=metric,
+        aggfunc="sum",
+        fill_value=0,
+        observed=True,
     )
+
     if pivot.empty:
         return None
-    pretty = {"conversions": "Конверсии", "clicks": "Клики", "Записей": "Количество записей"}
+
+    ordered_ages = [label for label in AGE_LABELS if label in pivot.index]
+    pivot = pivot.reindex(ordered_ages)
+
     fig = go.Figure()
     for seg in pivot.columns:
-        fig.add_trace(go.Bar(
-            x=pivot.index.astype(str),
-            y=pivot[seg].astype(float),
-            name=_truncate(seg, 28),
-        ))
+        fig.add_trace(
+            go.Bar(
+                x=pivot.index.astype(str),
+                y=pivot[seg].astype(float),
+                name=_truncate(seg, 28),
+            )
+        )
+
+    title = f"{pretty_metric} по возрастным группам"
+
     fig.update_layout(
-        **_BASE_LAYOUT, barmode="stack",
+        _BASE_LAYOUT,
+        barmode="group",
         xaxis_title="Возрастная группа",
-        yaxis_title=pretty.get(value_col, value_col),
+        yaxis_title=pretty_metric,
+        title=dict(text=title, x=0.02, xanchor="left"),
     )
+
     return PlotlySpec(
-        title="Распределение по возрасту",
-        html=_to_html(fig, f"{pretty.get(value_col, value_col)} по возрастным группам"),
-        description="Сложенная диаграмма по возрастным группам; в легенде можно скрывать ряды.",
+        title=title,
+        html=_to_html(fig, title),
+        description=f"Распределение по возрастным группам по метрике «{pretty_metric}».",
     )
 
 
@@ -1762,6 +1872,10 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     extra = _extra_category_chart(result)
     if extra is not None:
         specs.append(extra)
+
+    age = _age_chart(result)
+    if age is not None:
+        specs.append(age)
 
     # Если уже есть общий график по базовым метрикам, не дублируем их ranking-графиками.
     combined_funnel_metrics = {

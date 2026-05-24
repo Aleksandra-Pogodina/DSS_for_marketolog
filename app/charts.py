@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from app.processing import AnalysisResult
+from app.processing import AnalysisResult, AGE_LABELS
 
 sns.set_theme(style="whitegrid")
 plt.rcParams["font.family"] = "DejaVu Sans"
@@ -385,34 +385,89 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     age_table = result.age_table
     if age_table is None or age_table.empty:
         return None
-    value_col = None
-    for cand in ("conversions", "clicks", "Записей"):
-        if cand in age_table.columns:
-            value_col = cand
-            break
-    if value_col is None:
+
+    metric = getattr(result, "age_metric", None)
+    if not metric or metric not in age_table.columns:
+        for cand in ("conversions", "revenue", "clicks", "displays"):
+            if cand in age_table.columns:
+                metric = cand
+                break
+    if not metric or metric not in age_table.columns:
         return None
 
-    pivot = age_table.pivot_table(
-        index="Возрастная группа", columns=result.group_col, values=value_col,
-        aggfunc="sum", fill_value=0, observed=True,
-    )
+    age_col = "Возрастная группа"
+    pretty_metric = result.metric_labels.get(metric, metric)
+
+    if (
+        result.campaign_col
+        and result.channel_col
+        and result.campaign_col in age_table.columns
+        and result.channel_col in age_table.columns
+    ):
+        first_channel = (
+            age_table[result.channel_col]
+            .dropna()
+            .astype(str)
+            .iloc[0]
+            if not age_table[result.channel_col].dropna().empty
+            else None
+        )
+        if first_channel is None:
+            return None
+
+        filtered = age_table[age_table[result.channel_col].astype(str) == first_channel].copy()
+
+        pivot = filtered.pivot_table(
+            index=age_col,
+            columns=result.campaign_col,
+            values=metric,
+            aggfunc="sum",
+            fill_value=0,
+            observed=True,
+        )
+        chart_title = f"{pretty_metric} по возрастным группам · канал: {first_channel}"
+    else:
+        column_key = result.group_col
+        if column_key not in age_table.columns:
+            if result.campaign_col and result.campaign_col in age_table.columns:
+                column_key = result.campaign_col
+            elif result.channel_col and result.channel_col in age_table.columns:
+                column_key = result.channel_col
+            else:
+                return None
+
+        pivot = age_table.pivot_table(
+            index=age_col,
+            columns=column_key,
+            values=metric,
+            aggfunc="sum",
+            fill_value=0,
+            observed=True,
+        )
+        chart_title = f"{pretty_metric} по возрастным группам"
+
     if pivot.empty:
         return None
 
-    fig, ax = plt.subplots(figsize=(max(7, 0.6 * len(pivot.columns) + 3), 5))
-    pivot.plot(kind="bar", stacked=True, ax=ax, colormap="tab20")
-    pretty = {"conversions": "Конверсии", "clicks": "Клики"}
-    ax.set_ylabel(pretty.get(value_col, value_col))
+    ordered_ages = [label for label in AGE_LABELS if label in pivot.index]
+    pivot = pivot.reindex(ordered_ages).fillna(0)
+
+    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 3), 5))
+    pivot.plot(kind="bar", ax=ax, colormap="tab20")
+
     ax.set_xlabel("Возрастная группа")
-    ax.set_title(f"{pretty.get(value_col, value_col)} по возрастным группам")
-    ax.legend(title="Сегмент", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
+    ax.set_ylabel(pretty_metric)
+    ax.set_title(chart_title)
+    ax.legend(title="", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
     plt.xticks(rotation=0)
 
     path = _new_path("age", tmpdir)
     _save(fig, path)
-    return Chart(title="Распределение по возрасту", path=path,
-                 description="Распределение ключевой метрики по возрастным группам.")
+    return Chart(
+        title=chart_title,
+        path=path,
+        description=f"Распределение по возрастным группам по метрике «{pretty_metric}».",
+    )
 
 
 def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
