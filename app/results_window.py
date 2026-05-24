@@ -34,6 +34,24 @@ from app.processing import AnalysisResult, format_metrics_for_display
 from app.report import export_docx
 from app.theme import get_palette
 
+METRIC_LABELS = {
+    "displays": "Показы",
+    "clicks": "Клики",
+    "conversions": "Конверсии",
+    "revenue": "Выручка",
+    "total_cost": "Общая стоимость",
+    "placement_cost": "Стоимость размещения",
+    "cpc_avg": "Средний CPC (из данных)",
+    "CTR": "CTR, %",
+    "CPC": "CPC",
+    "CVR": "CVR, %",
+    "CPA": "CPA",
+    "AOV": "Средний чек",
+    "ROAS": "ROAS",
+    "cost_share": "Доля затрат, %",
+    "conv_share": "Доля конверсий, %",
+    "revenue_share": "Доля выручки, %",
+}
 
 def _format_compact(value) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -199,7 +217,7 @@ class ResultsWindow(QWidget):
                              f"Доп. категория · {self.result.extra_category_col}")
 
         if self.result.age_table is not None and not self.result.age_table.empty:
-            self.tabs.addTab(self._make_dataframe_tab(self.result.age_table), "По возрасту")
+            self.tabs.addTab(self._make_dataframe_tab(self._format_age_summary()), "По возрасту")
 
         if not self.result.dropped_rows.empty:
             self.tabs.addTab(
@@ -282,6 +300,35 @@ class ResultsWindow(QWidget):
                 es[c] = es[c].round(2)
 
         return es
+
+    def _format_age_summary(self) -> pd.DataFrame:
+        df = self.result.age_table.copy()
+
+        rename = {}
+
+        if self.result.channel_col and self.result.channel_col in df.columns:
+            rename[self.result.channel_col] = "Канал"
+
+        if self.result.campaign_col and self.result.campaign_col in df.columns:
+            rename[self.result.campaign_col] = "Кампания"
+
+        if self.result.group_col in df.columns and self.result.group_col not in rename:
+            rename[self.result.group_col] = self.result.group_label
+
+        for raw, label in self.result.metric_labels.items():
+            if raw in df.columns:
+                rename[raw] = label
+
+        if "cpc_avg" in df.columns and "cpc_avg" not in rename:
+            rename["cpc_avg"] = "Средний CPC (из данных)"
+
+        df = df.rename(columns=rename)
+
+        for c in df.columns:
+            if pd.api.types.is_numeric_dtype(df[c]):
+                df[c] = df[c].round(2)
+
+        return df
 
     def _make_dataframe_tab(self, df: pd.DataFrame) -> QWidget:
         widget = QWidget()

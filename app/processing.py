@@ -273,6 +273,7 @@ def _build_age_table(
     )
 
     group_fields = ["__age_group__"]
+
     if campaign_col and campaign_col in work.columns:
         group_fields.append(campaign_col)
     if channel_col and channel_col in work.columns:
@@ -282,10 +283,22 @@ def _build_age_table(
         group_fields.append(group_col)
 
     aggregations: dict[str, tuple[str, str]] = {}
-    for role in ("displays", "clicks", "conversions", "revenue", "total_cost", "placement_cost"):
+
+    for role in (
+        "displays",
+        "clicks",
+        "conversions",
+        "revenue",
+        "total_cost",
+        "placement_cost",
+    ):
         col = mapping.get(role)
         if col and col in work.columns:
             aggregations[role] = (col, "sum")
+
+    cpc_col = mapping.get("cpc")
+    if cpc_col and cpc_col in work.columns:
+        aggregations["cpc_avg"] = (cpc_col, "mean")
 
     if not aggregations:
         result = (
@@ -304,11 +317,94 @@ def _build_age_table(
 
     result = result.rename(columns={"__age_group__": "Возрастная группа"})
 
+    if "clicks" in result.columns and "displays" in result.columns:
+        result["CTR"] = _safe_divide(result["clicks"], result["displays"]) * 100
+
+    cost_for_cpc = None
+    if "total_cost" in result.columns:
+        cost_for_cpc = result["total_cost"]
+    elif "placement_cost" in result.columns:
+        cost_for_cpc = result["placement_cost"]
+
+    if cost_for_cpc is not None and "clicks" in result.columns:
+        result["CPC"] = _safe_divide(cost_for_cpc, result["clicks"])
+    elif "cpc_avg" in result.columns:
+        result["CPC"] = result["cpc_avg"]
+
+    if "conversions" in result.columns and "clicks" in result.columns:
+        result["CVR"] = _safe_divide(result["conversions"], result["clicks"]) * 100
+
+    cost_for_cpa = None
+    if "total_cost" in result.columns:
+        cost_for_cpa = result["total_cost"]
+    elif "placement_cost" in result.columns:
+        cost_for_cpa = result["placement_cost"]
+
+    if cost_for_cpa is not None and "conversions" in result.columns:
+        result["CPA"] = _safe_divide(cost_for_cpa, result["conversions"])
+
+    if "revenue" in result.columns and "conversions" in result.columns:
+        result["AOV"] = _safe_divide(result["revenue"], result["conversions"])
+
+    if "revenue" in result.columns:
+        if "total_cost" in result.columns:
+            result["ROAS"] = _safe_divide(result["revenue"], result["total_cost"])
+        elif "placement_cost" in result.columns:
+            result["ROAS"] = _safe_divide(result["revenue"], result["placement_cost"])
+
+    cost_total_col = None
+    if "total_cost" in result.columns:
+        cost_total_col = "total_cost"
+    elif "placement_cost" in result.columns:
+        cost_total_col = "placement_cost"
+
+    if cost_total_col is not None:
+        total_cost = result[cost_total_col].sum(skipna=True)
+        if total_cost and not pd.isna(total_cost) and total_cost > 0:
+            result["cost_share"] = result[cost_total_col] / total_cost * 100
+
+    if "conversions" in result.columns:
+        total_conv = result["conversions"].sum(skipna=True)
+        if total_conv and not pd.isna(total_conv) and total_conv > 0:
+            result["conv_share"] = result["conversions"] / total_conv * 100
+
+    if "revenue" in result.columns:
+        total_revenue = result["revenue"].sum(skipna=True)
+        if total_revenue and not pd.isna(total_revenue) and total_revenue > 0:
+            result["revenue_share"] = result["revenue"] / total_revenue * 100
+
     age_metric = None
     for metric in ("conversions", "revenue", "clicks", "displays"):
         if metric in result.columns and result[metric].notna().any():
             age_metric = metric
             break
+
+    metric_order = [
+        "Возрастная группа",
+        campaign_col,
+        channel_col,
+        group_col,
+        "displays",
+        "clicks",
+        "conversions",
+        "revenue",
+        "total_cost",
+        "placement_cost",
+        "cpc_avg",
+        "CTR",
+        "CPC",
+        "CVR",
+        "CPA",
+        "AOV",
+        "ROAS",
+        "cost_share",
+        "conv_share",
+        "revenue_share",
+        "Записей",
+    ]
+    metric_order = [c for c in metric_order if c and c in result.columns]
+    other_cols = [c for c in result.columns if c not in metric_order]
+    result = result[metric_order + other_cols]
 
     return result, age_metric
 
