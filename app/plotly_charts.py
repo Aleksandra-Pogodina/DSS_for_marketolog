@@ -1750,6 +1750,10 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     if hm is not None:
         specs.append(hm)
 
+    share_compare = build_share_comparison_chart(result)
+    if share_compare is not None:
+        specs.append(share_compare)
+
     # Если уже есть общий funnel по базовым метрикам, не дублируем их ranking-графиками.
     combined_funnel_metrics = {
         col
@@ -1788,14 +1792,14 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     df = result.metrics.copy()
 
     needed = ["cost_share", "conv_share", "revenue_share"]
-    available = [c for c in needed if c in df.columns]
+    available = [c for c in needed if c in df.columns and df[c].notna().any()]
     if len(available) < 2:
         return None
 
     colors = {
-        "cost_share": "#c65d3a",
-        "conv_share": "#2f7d4a",
-        "revenue_share": "#2f6db2",
+        "cost_share": "#C65D3A",
+        "conv_share": "#2E8B57",
+        "revenue_share": "#2F6DB3",
     }
     labels = {
         "cost_share": "Доля затрат",
@@ -1806,9 +1810,12 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     fig = go.Figure()
 
     if result.channel_col and result.campaign_col:
-        x_vals = [df[result.campaign_col].astype(str), df[result.channel_col].astype(str)]
+        x_vals = [
+            df[result.campaign_col].astype(str).tolist(),
+            df[result.channel_col].astype(str).tolist(),
+        ]
     else:
-        x_vals = df[result.group_col].astype(str)
+        x_vals = df[result.group_col].astype(str).tolist()
 
     for col in available:
         fig.add_trace(
@@ -1820,11 +1827,7 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
                 text=[f"{v:.1f}%" if pd.notna(v) else "" for v in df[col]],
                 textposition="outside",
                 cliponaxis=False,
-                hovertemplate=(
-                    f"{labels[col]}<br>"
-                    "%{x}<br>"
-                    "%{y:.2f}%<extra></extra>"
-                ),
+                hovertemplate=f"{labels[col]}<br>%{{y:.2f}}%<extra></extra>",
             )
         )
 
@@ -1833,33 +1836,26 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     fig.update_layout(
         **_BASE_LAYOUT,
         barmode="group",
-        title=title,
         yaxis=dict(
             title="Доля, %",
             ticksuffix="%",
             rangemode="tozero",
         ),
-        margin=dict(l=60, r=30, t=70, b=140),
     )
 
+    fig.update_layout(margin=dict(l=60, r=30, t=70, b=140))
+
     if result.channel_col and result.campaign_col:
-        fig.update_xaxes(
-            type="multicategory",
-            tickangle=0,
-            automargin=True,
-        )
+        fig.update_xaxes(type="multicategory", tickangle=-35, automargin=True)
     else:
-        fig.update_xaxes(
-            tickangle=-35,
-            automargin=True,
-        )
+        fig.update_xaxes(tickangle=-35, automargin=True)
 
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
         description=(
-            "График показывает, как по каждому сегменту соотносятся доля затрат, "
-            "доля конверсий и доля выручки."
+            "График показывает, как по каждому сегменту соотносятся "
+            "доля затрат, доля конверсий и доля выручки."
         ),
     )
 
