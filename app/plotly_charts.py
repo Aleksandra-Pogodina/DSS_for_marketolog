@@ -1154,7 +1154,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
             if camp != current:
                 annotations.append(dict(
                     x=(start + i - 1) / 2,
-                    y=-0.23,
+                    y=-0.30,
                     xref="x",
                     yref="paper",
                     text=current,
@@ -1178,7 +1178,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
 
         annotations.append(dict(
             x=(start + len(campaigns) - 1) / 2,
-            y=-0.23,
+            y=-0.30,
             xref="x",
             yref="paper",
             text=current,
@@ -1188,7 +1188,9 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
             font=dict(size=11)
         ))
 
-        bottom_margin = 145
+        bottom_margin = 165
+        tick_angle = -35
+
         customdata = np.column_stack([
             data[result.campaign_col].astype(str).to_numpy(),
             data[result.channel_col].astype(str).to_numpy()
@@ -1205,6 +1207,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         annotations = []
         shapes = []
         bottom_margin = 100
+        tick_angle = 0
+
         customdata = np.column_stack([data[result.group_col].astype(str).to_numpy()])
         hovertemplate = (
             "Сегмент: %{customdata[0]}<br>"
@@ -1230,7 +1234,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         tickmode="array",
         tickvals=list(range(len(data))),
         ticktext=x_labels,
-        tickangle=0,
+        tickangle=tick_angle,
+        automargin=True,
     )
     layout["yaxis"] = dict(title=pretty_name)
 
