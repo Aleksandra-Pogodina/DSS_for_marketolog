@@ -2150,17 +2150,20 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     if result.channel_col and result.campaign_col:
         if result.campaign_col not in df.columns or result.channel_col not in df.columns:
             return None
-        df = df.sort_values([result.campaign_col, result.channel_col], ascending=[True, True]).reset_index(drop=True)
+        df = df.sort_values(
+            [result.campaign_col, result.channel_col],
+            ascending=[True, True]
+        ).reset_index(drop=True)
         x = [
             df[result.campaign_col].astype(str).tolist(),
             df[result.channel_col].astype(str).tolist(),
         ]
-        x_kind = "multi"
+        kind = "multi"
     else:
         sort_col = "conv_share" if "conv_share" in available else available[0]
         df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
         x = df[result.group_col].astype(str).tolist()
-        x_kind = "flat"
+        kind = "flat"
 
     labels = {
         "cost_share": "Доля затрат",
@@ -2192,13 +2195,19 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     layout = dict(_BASE_LAYOUT)
     layout["barmode"] = "group"
     layout["margin"] = dict(l=60, r=30, t=70, b=140)
-    layout["yaxis"] = dict(title="Доля, %", ticksuffix="%", rangemode="tozero")
+    layout["yaxis"] = dict(
+        title="Доля, %",
+        ticksuffix="%",
+        rangemode="tozero",
+    )
+
+    if result.channel_col and result.campaign_col:
+        layout["shapes"] = campaignseparatorshapes(result, df)
+
     fig.update_layout(layout)
 
-    if x_kind == "multi":
-        fig.update_xaxes(type="multicategory", tickangle=-35, automargin=True)
-    else:
-        fig.update_xaxes(tickangle=-35, automargin=True)
+    _apply_segment_xaxis(fig, kind)
+    fig.update_xaxes(tickangle=-35, automargin=True)
 
     title = "Сравнение долей"
     return PlotlySpec(
