@@ -59,7 +59,6 @@ def _has_metric(df: pd.DataFrame, col: str) -> bool:
 
 
 def _segment_x_labels(result: AnalysisResult, df: pd.DataFrame) -> list[str]:
-    """Для vertical bar: две строки (канал / кампания), если доступны оба поля."""
     if (
         result.channel_col
         and result.campaign_col
@@ -122,45 +121,29 @@ def _month_order_key(value: object) -> tuple[int, str]:
 
 def _line_by_month_channel(
     result: AnalysisResult,
-    metric_cols: list[str],
-    title: str,
+    metric_col: str,
+    title_prefix: str,
     tmpdir: str,
-) -> Chart | None:
+) -> list[Chart]:
     """
-    Линейный график по месяцам для каждого канала отдельно.
-
-    Строится только если:
-    - выбран месяц (result.month_table не пустой),
-    - выбраны и кампания, и канал,
-    - в month_table есть колонки 'Месяц', campaign_col, channel_col.
+    Отдельный линейный график для каждого канала:
+    X = месяцы, линии = кампании.
+    Строится только если выбраны месяц + кампания + канал.
     """
     mt = result.month_table
     if mt is None or mt.empty:
-        return None
+        return []
 
     if not (
         result.campaign_col
         and result.channel_col
         and _has_cols(mt, ["Месяц", result.campaign_col, result.channel_col])
+        and _has_metric(mt, metric_col)
     ):
-        return None
-
-    present = [c for c in metric_cols if _has_metric(mt, c)]
-    if not present:
-        return None
+        return []
 
     work = mt.copy()
     work["__month_sort__"] = work["Месяц"].map(lambda x: _month_order_key(x)[0])
-
-    campaigns = (
-        work[result.campaign_col]
-        .dropna()
-        .astype(str)
-        .drop_duplicates()
-        .tolist()
-    )
-    if not campaigns:
-        return None
 
     channels = (
         work[result.channel_col]
@@ -170,42 +153,44 @@ def _line_by_month_channel(
         .tolist()
     )
     if not channels:
-        return None
+        return []
 
-    n_rows = len(present)
-    fig, axes = plt.subplots(
-        nrows=n_rows,
-        ncols=1,
-        figsize=(max(10, 0.85 * max(len(campaigns), 4) + 5), max(3.8 * n_rows, 4.4)),
-        squeeze=False,
-    )
-    axes = axes.ravel()
-    palette = sns.color_palette("tab10", n_colors=max(len(channels), 3))
+    charts: list[Chart] = []
 
-    for ax, metric in zip(axes, present):
-        metric_data = work.dropna(subset=[metric]).copy()
-        if metric_data.empty:
-            ax.set_visible(False)
+    for channel in channels:
+        channel_df = work[work[result.channel_col].astype(str) == channel].copy()
+        if channel_df.empty:
             continue
 
-        pivot = metric_data.pivot_table(
-            index=result.campaign_col,
-            columns=result.channel_col,
-            values=metric,
+        metric_df = channel_df.dropna(subset=[metric_col]).copy()
+        if metric_df.empty:
+            continue
+
+        pivot = metric_df.pivot_table(
+            index="Месяц",
+            columns=result.campaign_col,
+            values=metric_col,
             aggfunc="sum",
             fill_value=np.nan,
             observed=True,
         )
-
-        if pivot.empty:
-            ax.set_visible(False)
+        if pivot.empty or pivot.shape[1] == 0:
             continue
 
-        pivot = pivot.reindex(campaigns)
-        x = np.arange(len(pivot.index))
+        ordered_months = (
+            metric_df[["Месяц", "__month_sort__"]]
+            .drop_duplicates()
+            .sort_values(["__month_sort__", "Месяц"])
+        )
+        month_index = ordered_months["Месяц"].astype(str).tolist()
+        pivot = pivot.reindex(month_index)
 
-        for i, channel in enumerate(pivot.columns.astype(str)):
-            y = pivot[channel].astype(float).values
+        fig, ax = plt.subplots(figsize=(10.5, 5.6))
+        x = np.arange(len(pivot.index))
+        palette = sns.color_palette("tab10", n_colors=max(len(pivot.columns), 3))
+
+        for i, campaign in enumerate(pivot.columns.astype(str)):
+            y = pivot[campaign].astype(float).values
             if np.all(pd.isna(y)):
                 continue
 
@@ -213,44 +198,36 @@ def _line_by_month_channel(
                 x,
                 y,
                 marker="o",
-                linewidth=2.0,
+                linewidth=2.1,
                 markersize=5,
-                label=_truncate(channel, 18),
+                label=_truncate(campaign, 22),
                 color=palette[i % len(palette)],
             )
 
-        month_labels = []
-        for campaign in pivot.index.astype(str):
-            subset = (
-                metric_data[metric_data[result.campaign_col].astype(str) == campaign]
-                .copy()
-                .sort_values("__month_sort__")
-            )
-            month_vals = subset["Месяц"].dropna().astype(str).drop_duplicates().tolist()
-            if month_vals:
-                month_labels.append(_truncate(" / ".join(month_vals), 18))
-            else:
-                month_labels.append(_truncate(campaign, 18))
-
-        ax.set_title(result.metric_labels.get(metric, metric), loc="left")
+        ax.set_title(f"{title_prefix} · канал: {_truncate(channel, 26)}")
         ax.set_xticks(x)
-        ax.set_xticklabels(month_labels, rotation=0, fontsize=9)
-        ax.set_ylabel(result.metric_labels.get(metric, metric))
-        ax.set_xlabel("Месяцы")
+        ax.set_xticklabels([_truncate(v, 14) for v in pivot.index.astype(str)], fontsize=9)
+        ax.set_xlabel("Месяц")
+        ax.set_ylabel(result.metric_labels.get(metric_col, metric_col))
         ax.grid(True, axis="y", alpha=0.3)
-        ax.legend(title="Канал", fontsize=8, title_fontsize=9, loc="best")
+        ax.legend(title="Кампания", fontsize=8, title_fontsize=9, loc="best")
 
-    fig.suptitle(title, fontsize=14, y=1.02)
-    path = _new_path("line_month_channel", tmpdir)
-    _save(fig, path)
-    return Chart(
-        title=title,
-        path=path,
-        description=(
-            "Линейные графики построены по месяцам: для каждой метрики показаны линии каналов. "
-            "График создаётся только если выбраны месяц, кампания и канал."
-        ),
-    )
+        path = _new_path(f"line_{metric_col}", tmpdir)
+        _save(fig, path)
+
+        charts.append(
+            Chart(
+                title=f"{title_prefix} · канал: {_truncate(channel, 26)}",
+                path=path,
+                description=(
+                    f"Линейный график по месяцам для канала «{channel}». "
+                    f"Линии показывают сравнение кампаний по метрике "
+                    f"«{result.metric_labels.get(metric_col, metric_col)}»."
+                ),
+            )
+        )
+
+    return charts
 
 
 def _bar_chart(
@@ -280,22 +257,22 @@ def _bar_chart(
             [result.campaign_col, result.channel_col],
             ascending=[True, True],
         ).copy()
-        x_labels = [_truncate(v, 14) for v in data[result.channel_col].astype(str)]
+        x_labels = [_truncate(v, 16) for v in data[result.channel_col].astype(str)]
     else:
         data = data.sort_values(value_col, ascending=False).copy()
-        x_labels = [_truncate(v, 18) for v in data[result.group_col].astype(str)]
+        x_labels = [_truncate(v, 22) for v in data[result.group_col].astype(str)]
 
     values = data[value_col].astype(float).fillna(0)
     x = np.arange(len(data))
 
-    fig_width = max(9, 0.75 * len(data) + 3)
-    fig, ax = plt.subplots(figsize=(fig_width, 6))
+    fig_width = max(10, 0.75 * len(data) + 3)
+    fig, ax = plt.subplots(figsize=(fig_width, 6.4))
     bars = ax.bar(x, values, color=color, width=0.72)
 
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, rotation=0, fontsize=9)
+    ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=9)
 
     y_max = float(values.max()) if len(values) else 0.0
     top_pad = max(y_max * 0.12, 1.0)
@@ -317,7 +294,7 @@ def _bar_chart(
         for center, camp_label in _campaign_group_annotations(result, data):
             ax.text(
                 center,
-                -0.18,
+                -0.28,
                 camp_label,
                 transform=ax.get_xaxis_transform(),
                 ha="center",
@@ -336,7 +313,9 @@ def _bar_chart(
                     zorder=0,
                 )
 
-        fig.subplots_adjust(bottom=0.28)
+        fig.subplots_adjust(bottom=0.34)
+    else:
+        fig.subplots_adjust(bottom=0.24)
 
     path = _new_path(value_col, tmpdir)
     _save(fig, path)
@@ -366,7 +345,7 @@ def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     labels = _segment_x_labels(result, data)
     n = len(labels)
     width = 0.24
-    fig, ax = plt.subplots(figsize=(max(8, 0.8 * n + 3), 5.4))
+    fig, ax = plt.subplots(figsize=(max(9, 0.8 * n + 3), 5.8))
     x = np.arange(n)
 
     pretty = {
@@ -391,10 +370,11 @@ def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=0, fontsize=9)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
     ax.set_ylabel("%")
     ax.set_title("Сравнение долей: затраты, выручка, конверсии")
     ax.legend()
+    fig.subplots_adjust(bottom=0.26)
 
     path = _new_path("shares3", tmpdir)
     _save(fig, path)
@@ -541,7 +521,7 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
             return None
 
         pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
-        fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(pivot.index) + 3), 5.4))
+        fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(pivot.index) + 3), 5.6))
 
         n_cats = len(pivot.index)
         n_chans = len(pivot.columns)
@@ -560,11 +540,12 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
             )
 
         ax.set_xticks(x)
-        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=15, ha="right")
+        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=45, ha="right")
         ax.set_xlabel(str(cat))
         ax.set_ylabel(pretty)
         ax.set_title(f"{pretty}: {cat} × Каналы")
         ax.legend(title="Канал", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
+        fig.subplots_adjust(bottom=0.24)
 
         desc = f"Сравнение значений «{pretty}» по дополнительной категории «{cat}» в разрезе каналов."
         chart_title = f"{pretty}: {cat} × Каналы"
@@ -573,7 +554,7 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         if data.empty:
             return None
 
-        fig, ax = plt.subplots(figsize=(max(7, 0.75 * len(data) + 3), 5))
+        fig, ax = plt.subplots(figsize=(max(7, 0.75 * len(data) + 3), 5.4))
         ax.bar(
             [_truncate(v, 20) for v in data.index.astype(str)],
             data.values.astype(float),
@@ -582,7 +563,8 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         ax.set_ylabel(pretty)
         ax.set_xlabel(str(cat))
         ax.set_title(f"{pretty} по «{cat}»")
-        plt.xticks(rotation=15, ha="right")
+        plt.xticks(rotation=45, ha="right")
+        fig.subplots_adjust(bottom=0.24)
 
         desc = f"Суммарное значение «{pretty}» по дополнительной категории «{cat}»."
         chart_title = f"{pretty} по «{cat}»"
@@ -664,14 +646,15 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     if ordered_ages:
         pivot = pivot.reindex(ordered_ages).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 3), 5.2))
+    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 3), 5.4))
     pivot.plot(kind="bar", ax=ax, colormap="tab20")
 
     ax.set_xlabel("Возрастная группа")
     ax.set_ylabel(pretty_metric)
     ax.set_title(chart_title)
     ax.legend(title="", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
-    plt.xticks(rotation=0)
+    plt.xticks(rotation=45, ha="right")
+    fig.subplots_adjust(bottom=0.24)
 
     path = _new_path("age", tmpdir)
     _save(fig, path)
@@ -689,42 +672,30 @@ def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Char
     charts: list[Chart] = []
     labels = result.metric_labels
 
-    line_base = _line_by_month_channel(
-        result,
-        metric_cols=["displays", "clicks", "conversions"],
-        title="Линейные графики по месяцам: показы, клики, конверсии",
-        tmpdir=tmpdir,
-    )
-    if line_base:
-        charts.append(line_base)
+    for metric_col in ("displays", "clicks", "conversions"):
+        charts.extend(
+            _line_by_month_channel(
+                result,
+                metric_col=metric_col,
+                title_prefix=f"{labels.get(metric_col, metric_col)} по месяцам",
+                tmpdir=tmpdir,
+            )
+        )
 
-    line_kpi = _line_by_month_channel(
-        result,
-        metric_cols=["CPC", "CTR", "CVR", "CPA"],
-        title="Линейные графики по месяцам: CPC, CTR, CVR, CPA",
-        tmpdir=tmpdir,
-    )
-    if line_kpi:
-        charts.append(line_kpi)
+    for metric_col in ("CPC", "CTR", "CVR", "CPA"):
+        charts.extend(
+            _line_by_month_channel(
+                result,
+                metric_col=metric_col,
+                title_prefix=f"{labels.get(metric_col, metric_col)} по месяцам",
+                tmpdir=tmpdir,
+            )
+        )
 
     for value_col, color in (
         ("displays", "#88CCEE"),
         ("clicks", "#4477AA"),
         ("conversions", "#117733"),
-    ):
-        if _has_metric(result.metrics, value_col):
-            ch = _bar_chart(
-                result,
-                value_col,
-                f"{labels.get(value_col, value_col)} — ранжирование",
-                labels.get(value_col, value_col),
-                tmpdir,
-                color=color,
-            )
-            if ch:
-                charts.append(ch)
-
-    for value_col, color in (
         ("CPC", "#DDCC77"),
         ("CTR", "#882255"),
         ("CVR", "#AA4499"),

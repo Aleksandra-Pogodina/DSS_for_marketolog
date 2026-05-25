@@ -145,7 +145,7 @@ def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -
         doc.add_heading("Графики", level=1)
 
         for i, ch in enumerate(charts):
-            if i > 0:
+            if i > 0 and i % 2 == 0:
                 doc.add_page_break()
 
             p = doc.add_paragraph()
@@ -153,7 +153,7 @@ def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -
             run.bold = True
 
             try:
-                doc.add_picture(ch.path, width=Inches(6.3))
+                doc.add_picture(ch.path, width=Inches(6.1))
             except Exception as e:
                 doc.add_paragraph(f"(не удалось вставить график: {e})")
 
