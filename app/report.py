@@ -1,6 +1,6 @@
 """Генерация отчёта в DOCX.
 
-DOCX — основной стабильный формат отчёта.
+DOCX-отчёт остаётся основным стабильным форматом.
 Модуль получает уже построенные графики из app.charts и вставляет их в документ.
 """
 
@@ -76,7 +76,6 @@ def _normalize_title(text: str) -> str:
 
 
 def _deduplicate_charts(charts: list[Chart]) -> list[Chart]:
-    """Подстраховка: если одинаковый заголовок пришёл дважды, в DOCX вставляем один раз."""
     unique: list[Chart] = []
     seen: set[str] = set()
 
@@ -92,7 +91,6 @@ def _deduplicate_charts(charts: list[Chart]) -> list[Chart]:
 
 
 def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -> str:
-    """Сохраняет отчёт в DOCX. Возвращает путь к файлу."""
     doc = Document()
 
     for section in doc.sections:

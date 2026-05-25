@@ -1,7 +1,7 @@
 """Графики для DOCX-отчёта: matplotlib/seaborn -> PNG.
 
-Модуль строит статические PNG-графики для последующей вставки в DOCX.
 Каждый build_* возвращает объект Chart с заголовком, путём к PNG и описанием.
+PNG-формат удобен для встраивания в DOCX без повторной отрисовки.
 """
 
 from __future__ import annotations
@@ -76,7 +76,6 @@ def _segment_x_labels(result: AnalysisResult, df: pd.DataFrame) -> list[str]:
 
 
 def _campaign_group_annotations(result: AnalysisResult, df: pd.DataFrame) -> list[tuple[float, str]]:
-    """Возвращает список (x_center, campaign_label) для групповых подписей кампаний."""
     if not (
         result.channel_col
         and result.campaign_col
@@ -100,57 +99,96 @@ def _campaign_group_annotations(result: AnalysisResult, df: pd.DataFrame) -> lis
     return [((start + end) / 2, _truncate(camp, 18)) for start, end, camp in groups]
 
 
-def _line_by_campaign_channel(
+def _month_order_key(value: object) -> tuple[int, str]:
+    text = str(value).strip().lower()
+
+    month_order = {
+        "январь": 1, "янв": 1, "january": 1, "jan": 1, "1": 1, "01": 1,
+        "февраль": 2, "фев": 2, "february": 2, "feb": 2, "2": 2, "02": 2,
+        "март": 3, "мар": 3, "march": 3, "mar": 3, "3": 3, "03": 3,
+        "апрель": 4, "апр": 4, "april": 4, "apr": 4, "4": 4, "04": 4,
+        "май": 5, "may": 5, "5": 5, "05": 5,
+        "июнь": 6, "июн": 6, "june": 6, "jun": 6, "6": 6, "06": 6,
+        "июль": 7, "июл": 7, "july": 7, "jul": 7, "7": 7, "07": 7,
+        "август": 8, "авг": 8, "august": 8, "aug": 8, "8": 8, "08": 8,
+        "сентябрь": 9, "сен": 9, "september": 9, "sep": 9, "9": 9, "09": 9,
+        "октябрь": 10, "окт": 10, "october": 10, "oct": 10, "10": 10,
+        "ноябрь": 11, "ноя": 11, "november": 11, "nov": 11, "11": 11,
+        "декабрь": 12, "дек": 12, "december": 12, "dec": 12, "12": 12,
+    }
+
+    return (month_order.get(text, 999), text)
+
+
+def _line_by_month_channel(
     result: AnalysisResult,
     metric_cols: list[str],
     title: str,
     tmpdir: str,
 ) -> Chart | None:
     """
-    Линейный график строится только если выбраны И кампании, И каналы.
-    Для каждой метрики рисуется отдельная панель, внутри которой линии = каналы.
+    Линейный график по месяцам для каждого канала отдельно.
+
+    Строится только если:
+    - выбран месяц (result.month_table не пустой),
+    - выбраны и кампания, и канал,
+    - в month_table есть колонки 'Месяц', campaign_col, channel_col.
     """
-    m = result.metrics
+    mt = result.month_table
+    if mt is None or mt.empty:
+        return None
 
     if not (
         result.campaign_col
         and result.channel_col
-        and _has_cols(m, [result.campaign_col, result.channel_col])
+        and _has_cols(mt, ["Месяц", result.campaign_col, result.channel_col])
     ):
         return None
 
-    present = [c for c in metric_cols if _has_metric(m, c)]
+    present = [c for c in metric_cols if _has_metric(mt, c)]
     if not present:
         return None
 
-    data = m.dropna(subset=[result.campaign_col, result.channel_col], how="any").copy()
-    if data.empty:
+    work = mt.copy()
+    work["__month_sort__"] = work["Месяц"].map(lambda x: _month_order_key(x)[0])
+
+    campaigns = (
+        work[result.campaign_col]
+        .dropna()
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+    if not campaigns:
         return None
 
-    campaigns = data[result.campaign_col].astype(str).dropna().unique().tolist()
-    channels = data[result.channel_col].astype(str).dropna().unique().tolist()
-    if not campaigns or not channels:
+    channels = (
+        work[result.channel_col]
+        .dropna()
+        .astype(str)
+        .drop_duplicates()
+        .tolist()
+    )
+    if not channels:
         return None
 
-    n = len(present)
+    n_rows = len(present)
     fig, axes = plt.subplots(
-        nrows=n,
+        nrows=n_rows,
         ncols=1,
-        figsize=(max(10, 0.9 * len(campaigns) + 4), max(3.6 * n, 4.2)),
+        figsize=(max(10, 0.85 * max(len(campaigns), 4) + 5), max(3.8 * n_rows, 4.4)),
         squeeze=False,
     )
     axes = axes.ravel()
-
     palette = sns.color_palette("tab10", n_colors=max(len(channels), 3))
 
     for ax, metric in zip(axes, present):
-        plot_df = data[[result.campaign_col, result.channel_col, metric]].copy()
-        plot_df = plot_df.dropna(subset=[metric])
-        if plot_df.empty:
+        metric_data = work.dropna(subset=[metric]).copy()
+        if metric_data.empty:
             ax.set_visible(False)
             continue
 
-        pivot = plot_df.pivot_table(
+        pivot = metric_data.pivot_table(
             index=result.campaign_col,
             columns=result.channel_col,
             values=metric,
@@ -181,22 +219,36 @@ def _line_by_campaign_channel(
                 color=palette[i % len(palette)],
             )
 
+        month_labels = []
+        for campaign in pivot.index.astype(str):
+            subset = (
+                metric_data[metric_data[result.campaign_col].astype(str) == campaign]
+                .copy()
+                .sort_values("__month_sort__")
+            )
+            month_vals = subset["Месяц"].dropna().astype(str).drop_duplicates().tolist()
+            if month_vals:
+                month_labels.append(_truncate(" / ".join(month_vals), 18))
+            else:
+                month_labels.append(_truncate(campaign, 18))
+
         ax.set_title(result.metric_labels.get(metric, metric), loc="left")
         ax.set_xticks(x)
-        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=0, fontsize=9)
+        ax.set_xticklabels(month_labels, rotation=0, fontsize=9)
         ax.set_ylabel(result.metric_labels.get(metric, metric))
+        ax.set_xlabel("Месяцы")
         ax.grid(True, axis="y", alpha=0.3)
         ax.legend(title="Канал", fontsize=8, title_fontsize=9, loc="best")
 
     fig.suptitle(title, fontsize=14, y=1.02)
-    path = _new_path("line_campaign_channel", tmpdir)
+    path = _new_path("line_month_channel", tmpdir)
     _save(fig, path)
     return Chart(
         title=title,
         path=path,
         description=(
-            "Линии показывают динамику/различия по выбранным метрикам между каналами "
-            "в разрезе кампаний. График строится только если выбраны и кампании, и каналы."
+            "Линейные графики построены по месяцам: для каждой метрики показаны линии каналов. "
+            "График создаётся только если выбраны месяц, кампания и канал."
         ),
     )
 
@@ -257,7 +309,6 @@ def _bar_chart(
             ha="center",
             va="bottom",
             fontsize=9,
-            rotation=0,
         )
 
     if has_campaign_and_channel:
@@ -297,7 +348,6 @@ def _bar_chart(
 
 
 def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    """Сравнение 3 долей: затрат, выручки, конверсий."""
     m = result.metrics
     cols = [c for c in ("cost_share", "revenue_share", "conv_share") if _has_metric(m, c)]
     if len(cols) < 2:
@@ -356,7 +406,6 @@ def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
 
 
 def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -> Chart | None:
-    """Тепловая карта KPI: цвет — отклонение от среднего в σ, в клетках — реальные значения."""
     m = result.metrics
     present = [c for c in cols if _has_metric(m, c)]
     if len(present) < 2:
@@ -474,7 +523,6 @@ def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -
 
 
 def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    """График по дополнительному столбцу: строим только если extra-данные действительно есть."""
     es = result.extra_summary
     if es is None or es.empty or not result.extra_metric:
         return None
@@ -491,9 +539,10 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         pivot = es.pivot_table(index=cat, columns=chan, values=metric, aggfunc="sum", fill_value=0, observed=True)
         if pivot.empty:
             return None
-        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
 
+        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
         fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(pivot.index) + 3), 5.4))
+
         n_cats = len(pivot.index)
         n_chans = len(pivot.columns)
         width = 0.8 / max(n_chans, 1)
@@ -544,7 +593,6 @@ def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
 
 
 def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    """График по возрасту: строим только если age_table реально сформирована."""
     age_table = result.age_table
     if age_table is None or age_table.empty:
         return None
@@ -635,43 +683,30 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
 
 
 def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Chart]:
-    """
-    Собирает полный набор графиков для DOCX.
-
-    Важно:
-    - линейные графики строятся только если выбраны и кампании, и каналы;
-    - остальные графики строятся только если есть нужные столбцы/метрики;
-    - никаких падений на отсутствующих полях быть не должно.
-    """
     if tmpdir is None:
         tmpdir = tempfile.mkdtemp(prefix="mkt_charts_")
 
     charts: list[Chart] = []
     labels = result.metric_labels
 
-    # 1. Линейный по показам / кликам / конверсиям для всех каналов отдельно,
-    #    если выбраны кампании и каналы.
-    line_base = _line_by_campaign_channel(
+    line_base = _line_by_month_channel(
         result,
         metric_cols=["displays", "clicks", "conversions"],
-        title="Линейные графики по показам, кликам и конверсиям",
+        title="Линейные графики по месяцам: показы, клики, конверсии",
         tmpdir=tmpdir,
     )
     if line_base:
         charts.append(line_base)
 
-    # 2. Линейный по 4 KPI: CPC / CTR / CVR / CPA,
-    #    если выбраны кампании и каналы.
-    line_kpi = _line_by_campaign_channel(
+    line_kpi = _line_by_month_channel(
         result,
         metric_cols=["CPC", "CTR", "CVR", "CPA"],
-        title="Линейные графики по KPI: CPC, CTR, CVR, CPA",
+        title="Линейные графики по месяцам: CPC, CTR, CVR, CPA",
         tmpdir=tmpdir,
     )
     if line_kpi:
         charts.append(line_kpi)
 
-    # 3. Столбчатые диаграммы по базовым метрикам.
     for value_col, color in (
         ("displays", "#88CCEE"),
         ("clicks", "#4477AA"),
@@ -689,7 +724,6 @@ def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Char
             if ch:
                 charts.append(ch)
 
-    # 4. Столбчатые диаграммы по KPI.
     for value_col, color in (
         ("CPC", "#DDCC77"),
         ("CTR", "#882255"),
@@ -708,24 +742,20 @@ def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Char
             if ch:
                 charts.append(ch)
 
-    # 5. Сравнение 3 долей.
     share = _share_chart(result, tmpdir)
     if share:
         charts.append(share)
 
-    # 6. Тепловая карта KPI с отклонением от среднего.
     kpi_cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if _has_metric(result.metrics, c)]
     if len(kpi_cols) >= 2:
         hm = _heatmap(result, kpi_cols, "Тепловая карта KPI с отклонением от среднего", tmpdir)
         if hm:
             charts.append(hm)
 
-    # 7. График по доп. столбцу.
     extra = _extra_category_chart(result, tmpdir)
     if extra:
         charts.append(extra)
 
-    # 8. График по возрасту.
     age = _age_chart(result, tmpdir)
     if age:
         charts.append(age)
