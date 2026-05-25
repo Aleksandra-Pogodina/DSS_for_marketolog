@@ -1024,6 +1024,62 @@ def campaignseparatorshapes(result: AnalysisResult, df: pd.DataFrame) -> list[di
 
     return shapes
 
+def _campaign_group_annotations(result: AnalysisResult, data: pd.DataFrame) -> list[dict]:
+    """Одна подпись кампании на одну группу каналов, ниже оси X."""
+    if not (
+        result.channel_col
+        and result.campaign_col
+        and result.channel_col in data.columns
+        and result.campaign_col in data.columns
+    ):
+        return []
+
+    campaigns = data[result.campaign_col].astype(str).tolist()
+    if not campaigns:
+        return []
+
+    annotations: list[dict] = []
+    start = 0
+    current = campaigns[0]
+
+    for i in range(1, len(campaigns)):
+        if campaigns[i] != current:
+            center = (start + i - 1) / 2
+            annotations.append(
+                dict(
+                    x=center,
+                    y=-0.36,
+                    xref="x",
+                    yref="paper",
+                    text=current,
+                    showarrow=False,
+                    xanchor="center",
+                    yanchor="top",
+                    font=dict(size=12),
+                    align="center",
+                )
+            )
+            start = i
+            current = campaigns[i]
+
+    center = (start + len(campaigns) - 1) / 2
+    annotations.append(
+        dict(
+            x=center,
+            y=-0.36,
+            xref="x",
+            yref="paper",
+            text=current,
+            showarrow=False,
+            xanchor="center",
+            yanchor="top",
+            font=dict(size=12),
+            align="center",
+        )
+    )
+
+    return annotations
+
 def _segment_x(result: AnalysisResult, source_df: pd.DataFrame):
     """Возвращает x для bar-чарта.
 
@@ -1302,7 +1358,8 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         ])
         hover_head = "%{customdata[0]}<br>%{customdata[1]}<br>"
         shapes = campaignseparatorshapes(result, data)
-        bottom_margin = 140
+        annotations = _campaign_group_annotations(result, data)
+        bottom_margin = 185
     else:
         data = data.sort_values(value_col, ascending=False).reset_index(drop=True)
 
@@ -1313,6 +1370,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         ])
         hover_head = "%{customdata[0]}<br>"
         shapes = []
+        annotations = []
         bottom_margin = 120
 
     vals = pd.to_numeric(data[value_col], errors="coerce").fillna(0).tolist()
@@ -1354,6 +1412,7 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
     )
     layout["yaxis"] = _y_axis_with_headroom(vals, pretty_name, percent=is_percent)
     layout["shapes"] = shapes
+    layout["annotations"] = annotations
 
     fig.update_layout(layout)
 
@@ -2035,6 +2094,8 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
         x = list(range(len(df)))
         x_labels = df[result.channel_col].astype(str).tolist()
         shapes = campaignseparatorshapes(result, df)
+        annotations = _campaign_group_annotations(result, df)
+        bottom_margin = 185
     else:
         sort_col = "conv_share" if "conv_share" in available else available[0]
         df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
@@ -2042,6 +2103,8 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
         x = df[result.group_col].astype(str).tolist()
         x_labels = None
         shapes = []
+        annotations = []
+        bottom_margin = 140
 
     labels = {
         "cost_share": "Доля затрат",
@@ -2055,9 +2118,12 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     }
 
     fig = go.Figure()
+    max_vals: list[float] = []
 
     for col in available:
         vals = pd.to_numeric(df[col], errors="coerce").fillna(0).tolist()
+        max_vals.extend(vals)
+
         fig.add_trace(
             go.Bar(
                 x=x,
@@ -2076,13 +2142,10 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
 
     layout = dict(_BASE_LAYOUT)
     layout["barmode"] = "group"
-    layout["margin"] = dict(l=60, r=30, t=70, b=140)
-    layout["yaxis"] = dict(
-        title="Доля, %",
-        ticksuffix="%",
-        rangemode="tozero",
-    )
+    layout["margin"] = dict(l=60, r=30, t=90, b=bottom_margin)
+    layout["yaxis"] = _y_axis_with_headroom(max_vals, "Доля, %", percent=True)
     layout["shapes"] = shapes
+    layout["annotations"] = annotations
 
     if result.channel_col and result.campaign_col:
         layout["xaxis"] = dict(
