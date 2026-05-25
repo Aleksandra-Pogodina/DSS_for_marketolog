@@ -1678,13 +1678,13 @@ def _age_chart(result: AnalysisResult) -> PlotlySpec | None:
 
 
 def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
-    """График по дополнительной категории без разбивки по каналам."""
     es = result.extra_summary
     if es is None or es.empty or not result.extra_metric:
         return None
 
     cat_col = result.extra_category_col
     metric = result.extra_metric
+
     if cat_col not in es.columns or metric not in es.columns:
         return None
 
@@ -1699,16 +1699,27 @@ def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
     if data.empty:
         return None
 
+    vals = pd.to_numeric(data[metric], errors="coerce").fillna(0).tolist()
+    is_percent = metric in {"CTR", "CVR", "cost_share", "conv_share", "revenue_share"}
+
+    if metric in {"CTR", "CVR", "cost_share", "conv_share", "revenue_share"}:
+        hovertemplate = f"%{{x}}<br>{pretty_metric}: %{{y:.2f}}%<extra></extra>"
+    elif metric in {"CPC", "CPA", "AOV", "ROAS"}:
+        hovertemplate = f"%{{x}}<br>{pretty_metric}: %{{y:,.2f}}<extra></extra>"
+    else:
+        hovertemplate = f"%{{x}}<br>{pretty_metric}: %{{y:,.0f}}<extra></extra>"
+
     fig = go.Figure(
         go.Bar(
             x=data[cat_col].astype(str),
-            y=data[metric].astype(float),
-            marker_color="#1c8f9e",
-            hovertemplate=(
-                "%{x}<br>"
-                f"{pretty_metric}: " +
-                ("%{y:.2f}" if metric in {"CTR", "CVR", "CPC", "CPA", "ROAS", "AOV"} else "%{y:,.0f}") +
-                "<extra></extra>"
+            y=vals,
+            marker_color="#1C8F9E",
+            hovertemplate=hovertemplate,
+            **_bar_text_params(
+                vals,
+                metric=metric,
+                n_bars=len(data),
+                n_series=1,
             ),
         )
     )
@@ -1716,25 +1727,17 @@ def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
     title = f"{pretty_metric} по {cat_col}"
 
     layout = dict(_BASE_LAYOUT)
-    layout["title"] = dict(text=title, x=0.02, xanchor="left")
     layout["showlegend"] = False
-    layout["xaxis"] = dict(
-        title=str(cat_col),
-        tickangle=-35,
-        automargin=True,
-    )
-    layout["yaxis"] = dict(
-        title=pretty_metric,
-        rangemode="tozero",
-    )
-    layout["margin"] = dict(l=60, r=30, t=70, b=120)
+    layout["margin"] = dict(l=60, r=30, t=90, b=120)
+    layout["xaxis"] = dict(title=str(cat_col), tickangle=-35, automargin=True)
+    layout["yaxis"] = _y_axis_with_headroom(vals, pretty_metric, percent=is_percent)
 
     fig.update_layout(layout)
 
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
-        description=f"Сравнение значений категории «{cat_col}» по метрике «{pretty_metric}».",
+        description=f"Сравнение категорий «{cat_col}» по показателю «{pretty_metric}».",
     )
 
 
