@@ -228,13 +228,13 @@ class MainWindow(QMainWindow):
         title.setObjectName("SectionTitle")
         head.addWidget(title)
         head.addStretch()
-        self.mapping_status = QLabel("Сначала загрузите файл.")
+        self.mapping_status = QLabel("сначала загрузите файл")
         self.mapping_status.setObjectName("SectionHint")
         head.addWidget(self.mapping_status)
         card_layout.addLayout(head)
 
         hint = QLabel(
-            "Обязательно: «Каналы» или «Кампании», плюс минимум одно числовое поле. "
+            "Обязательно: «Каналы» или «Кампании», и минимум одно поле. "
             "Поле «Доп. категория» — любое категориальное поле."
         )
         hint.setObjectName("SectionHint")
@@ -286,7 +286,7 @@ class MainWindow(QMainWindow):
         title = QLabel("4. Запустите анализ")
         title.setObjectName("SectionTitle")
         sub = QLabel(
-            "Мы посчитаем метрики, подготовим рекомендации, графики и отчёт DOCX."
+            "Мы посчитаем показатели, подготовим рекомендации, графики и отчёт DOCX."
         )
         sub.setObjectName("SectionHint")
         sub.setWordWrap(True)
@@ -338,7 +338,7 @@ class MainWindow(QMainWindow):
         if problem_cols:
             self.info_label.setText(
                 f"Файл «{filename}» загружен. Подозрительные значения в столбцах: "
-                f"{', '.join(problem_cols)} (ячйки выделены цветом)  — они будут пропущены при подсчёте."
+                f"{', '.join(problem_cols)} (ячейки выделены цветом)  — они будут пропущены при подсчёте."
             )
             self.header_status.setObjectName("BadgeWarn")
             self.header_status.setText(f"{filename} · есть замечания")
@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
             self.mapping_status.setText("Нужно ещё: " + "; ".join(problems) + ".")
         else:
             self.next_btn.setEnabled(True)
-            self.mapping_status.setText("Готово — можно запускать анализ.")
+            self.mapping_status.setText("готово — можно запускать анализ")
 
     def _validate_mapping(self, mapping: dict):
         if not mapping.get("channels") and not mapping.get("campaigns"):

@@ -1417,7 +1417,7 @@ def _kpi_zscore_heatmap(result: AnalysisResult) -> PlotlySpec | None:
             zmax=abs_max,
             colorbar=dict(
                 title=dict(
-                    text="Отклонение от среднего, σ",
+                    text="Отклонение от среднего",
                     side="right"
                 ),
                 thickness=18,

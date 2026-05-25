@@ -141,7 +141,7 @@ class ResultsWindow(QWidget):
         text_block.addWidget(title)
 
         subtitle = QLabel(
-            f"Группировка: <b>{self.result.group_label}</b> · "
+            f"Группировка: <b>{self.result.group_label.lower()}</b> · "
             f"строк после очистки: {self.result.rows_loaded} из {self.result.rows_original} "
             f"(удалено {self.result.rows_dropped})"
         )
@@ -198,8 +198,8 @@ class ResultsWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
 
-        self.tabs.addTab(self._make_metrics_tab(), "Метрики")
-        self.tabs.addTab(self._make_recommendations_tab(), "Рекомендации (DSS)")
+        self.tabs.addTab(self._make_metrics_tab(), "Показатели")
+        self.tabs.addTab(self._make_recommendations_tab(), "Рекомендации")
 
         self.plotly_specs = build_plotly_charts(self.result)
         self.charts = build_charts(self.result, tmpdir=self.tmpdir)
