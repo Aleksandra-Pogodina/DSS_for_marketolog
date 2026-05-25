@@ -1172,18 +1172,44 @@ def format_metrics_for_display(result: AnalysisResult) -> pd.DataFrame:
     """
     df = result.metrics.copy()
 
+    metric_order = [
+        "displays",
+        "clicks",
+        "conversions",
+        "revenue",
+        "total_cost",
+        "placement_cost",
+        "clicks_cost",
+        "CTR",
+        "CPC",
+        "CVR",
+        "CPA",
+        "AOV",
+        "ROAS",
+        "cost_share",
+        "conv_share",
+        "revenue_share",
+    ]
+
     if result.channel_col and result.campaign_col:
-        # Прячем технический объединённый ключ, оставляем человеческие столбцы.
         if result.group_col in df.columns:
             df = df.drop(columns=[result.group_col])
+
         front_cols = [c for c in (result.campaign_col, result.channel_col) if c in df.columns]
-        other = [c for c in df.columns if c not in front_cols]
-        df = df[front_cols + other]
+        ordered_metrics = [c for c in metric_order if c in df.columns]
+        other_cols = [c for c in df.columns if c not in front_cols + ordered_metrics]
+        df = df[front_cols + ordered_metrics + other_cols]
+
         rename = {
             result.campaign_col: ROLE_LABELS_RU["campaigns"],
             result.channel_col: ROLE_LABELS_RU["channels"],
         }
     else:
+        front_cols = [result.group_col] if result.group_col in df.columns else []
+        ordered_metrics = [c for c in metric_order if c in df.columns]
+        other_cols = [c for c in df.columns if c not in front_cols + ordered_metrics]
+        df = df[front_cols + ordered_metrics + other_cols]
+
         rename = {result.group_col: result.group_label}
 
     for raw, label in result.metric_labels.items():
@@ -1194,5 +1220,6 @@ def format_metrics_for_display(result: AnalysisResult) -> pd.DataFrame:
     for raw, label in result.metric_labels.items():
         if label in df.columns:
             df[label] = df[label].apply(lambda v: _format_value(raw, v))
+
     return df
 
