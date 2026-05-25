@@ -408,6 +408,7 @@ def _build_age_table(
 
     return result, age_metric
 
+
 def _build_month_table(
     df: pd.DataFrame,
     mapping: dict,
@@ -1194,3 +1195,4 @@ def format_metrics_for_display(result: AnalysisResult) -> pd.DataFrame:
         if label in df.columns:
             df[label] = df[label].apply(lambda v: _format_value(raw, v))
     return df
+

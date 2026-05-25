@@ -903,6 +903,38 @@ def _truncate(s, n: int = 28) -> str:
     s = str(s)
     return s if len(s) <= n else s[: n - 1] + "…"
 
+def campaignseparatorshapes(result: AnalysisResult, df: pd.DataFrame) -> list[dict]:
+    """
+    Вертикальные разделители между группами кампаний.
+    Линии рисуются только в области построения столбцов и не заходят на подписи.
+    """
+    if (
+        df.empty
+        or not result.campaign_col
+        or result.campaign_col not in df.columns
+    ):
+        return []
+
+    campaigns = df[result.campaign_col].astype(str).tolist()
+    shapes: list[dict] = []
+
+    for i in range(1, len(campaigns)):
+        if campaigns[i] != campaigns[i - 1]:
+            shapes.append(
+                dict(
+                    type="line",
+                    xref="x",
+                    yref="paper",
+                    x0=i - 0.5,
+                    x1=i - 0.5,
+                    y0=0,
+                    y1=1,
+                    line=dict(color="rgba(120,120,120,0.35)", width=1),
+                    layer="below",
+                )
+            )
+
+    return shapes
 
 def _segment_x(result: AnalysisResult, source_df: pd.DataFrame):
     """Возвращает x для bar-чарта.
@@ -935,53 +967,71 @@ def _sorted_for_segments(result: AnalysisResult, df: pd.DataFrame, sort_metric: 
 
 def _apply_segment_xaxis(fig: go.Figure, kind: str) -> None:
     if kind == "multi":
-        fig.update_xaxes(type="multicategory", tickangle=0)
+        fig.update_xaxes(
+            type="multicategory",
+            tickangle=0,
+            showdividers=False,
+            dividercolor="rgba(0,0,0,0)",
+            dividerwidth=0,
+            automargin=True,
+        )
     else:
-        fig.update_xaxes(tickangle=-20)
+        fig.update_xaxes(
+            tickangle=-20,
+            automargin=True,
+        )
 
 
 # ---------- графики ---------------------------------------------------------
 
 def _funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
-    """Сводный график: показы / клики / конверсии — только из доступных метрик."""
-    cols_available = [c for c in ("displays", "clicks", "conversions") if c in result.metrics.columns]
-    if len(cols_available) < 2:
+    colsavailable = [c for c in ("displays", "clicks", "conversions") if c in result.metrics.columns]
+    if len(colsavailable) < 2:
         return None
 
-    sort_metric = "conversions" if "conversions" in cols_available else cols_available[0]
-    m = _sorted_for_segments(result, result.metrics, sort_metric)
+    sortmetric = "conversions" if "conversions" in colsavailable else colsavailable[0]
+    m = _sorted_for_segments(result, result.metrics, sortmetric)
     x, kind = _segment_x(result, m)
-    colors = {"displays": "#88CCEE", "clicks": "#4477AA", "conversions": "#117733"}
+
+    colors = {
+        "displays": "#88CCEE",
+        "clicks": "#4477AA",
+        "conversions": "#117733",
+    }
 
     fig = go.Figure()
-    for col in cols_available:
-        fig.add_trace(go.Bar(
-            x=x,
-            y=m[col].astype(float),
-            name=_FUNNEL_LABELS[col],
-            marker_color=colors.get(col),
-            hovertemplate="<b>%{x}</b><br>" + _FUNNEL_LABELS[col] + ": %{y:,.0f}<extra></extra>",
-        ))
+
+    for col in colsavailable:
+        fig.add_trace(
+            go.Bar(
+                x=x,
+                y=m[col].astype(float),
+                name=_FUNNEL_LABELS[col],
+                marker_color=colors.get(col),
+                hovertemplate=f"%{{x}}<br>{_FUNNEL_LABELS[col]}: %{{y:,.0f}}<extra></extra>",
+            )
+        )
 
     layout = dict(_BASE_LAYOUT)
     layout["barmode"] = "group"
-    layout["yaxis_title"] = "Значение"
+    layout["yaxis"] = dict(title="")
     layout["margin"] = dict(l=60, r=30, t=70, b=140)
 
-    fig.update_layout(**layout)
+    if kind == "multi":
+        layout["shapes"] = campaignseparatorshapes(result, m)
 
+    fig.update_layout(layout)
     _apply_segment_xaxis(fig, kind)
-
     fig.update_xaxes(
         tickangle=-35,
         automargin=True,
     )
 
-    chart_title = _funnel_title(cols_available)
+    charttitle = _funnel_title(colsavailable)
     return PlotlySpec(
-        title=chart_title,
-        html=_to_html(fig, chart_title),
-        description="Каждый ряд можно скрыть/показать кликом по легенде.",
+        title=charttitle,
+        html=_to_html(fig, charttitle),
+        description="Показывает показы, клики и конверсии по сегментам.",
     )
 
 
@@ -1180,16 +1230,19 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
 
                 # Верхний разделитель в paper-координатах
                 x_paper = i / n
-                shapes.append(dict(
-                    type="line",
-                    xref="paper",
-                    yref="paper",
-                    x0=x_paper,
-                    x1=x_paper,
-                    y0=1.01,
-                    y1=1.10,
-                    line=dict(color="rgba(120,120,120,0.45)", width=1)
-                ))
+                shapes.append(
+                    dict(
+                        type="line",
+                        xref="x",
+                        yref="paper",
+                        x0=i - 0.5,
+                        x1=i - 0.5,
+                        y0=0,
+                        y1=1,
+                        line=dict(color="rgba(120,120,120,0.35)", width=1),
+                        layer="below",
+                    )
+                )
 
                 start = i
                 current = camp
@@ -1868,7 +1921,6 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     if share_compare is not None:
         specs.append(share_compare)
 
-    # ---------- график по доп. категории ----------
     extra = _extra_category_chart(result)
     if extra is not None:
         specs.append(extra)
@@ -1911,75 +1963,55 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     return specs
 
 def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
-    """Сравнение долей затрат, конверсий и выручки по сегментам."""
-    df = result.metrics.copy()
-
-    needed = ["cost_share", "conv_share", "revenue_share"]
-    available = [c for c in needed if c in df.columns and df[c].notna().any()]
-    if len(available) < 2:
+    m = result.metrics
+    cols = [c for c in ("costshare", "convshare") if c in m.columns]
+    if not cols:
         return None
 
-    colors = {
-        "cost_share": "#C65D3A",
-        "conv_share": "#2E8B57",
-        "revenue_share": "#2F6DB3",
+    data = m.dropna(subset=cols, how="all")
+    if data.empty:
+        return None
+
+    data = _sorted_for_segments(result, data, "convshare" if "convshare" in cols else cols[0])
+    x, kind = _segment_x(result, data)
+
+    pretty = {
+        "costshare": "Доля расходов, %",
+        "convshare": "Доля конверсий, %",
     }
-    labels = {
-        "cost_share": "Доля затрат",
-        "conv_share": "Доля конверсий",
-        "revenue_share": "Доля выручки",
+    colors = {
+        "costshare": "#CC6677",
+        "convshare": "#117733",
     }
 
     fig = go.Figure()
 
-    if result.channel_col and result.campaign_col:
-        x_vals = [
-            df[result.campaign_col].astype(str).tolist(),
-            df[result.channel_col].astype(str).tolist(),
-        ]
-    else:
-        x_vals = df[result.group_col].astype(str).tolist()
-
-    for col in available:
+    for c in cols:
         fig.add_trace(
             go.Bar(
-                x=x_vals,
-                y=df[col],
-                name=labels[col],
-                marker_color=colors[col],
-                text=[f"{v:.1f}%" if pd.notna(v) else "" for v in df[col]],
-                textposition="outside",
-                cliponaxis=False,
-                hovertemplate=f"{labels[col]}<br>%{{y:.2f}}%<extra></extra>",
+                x=x,
+                y=data[c].astype(float),
+                name=pretty[c],
+                marker_color=colors[c],
+                hovertemplate=f"%{{x}}<br>{pretty[c]}: %{{y:.2f}}<extra></extra>",
             )
         )
 
-    title = "Сравнение долей затрат, конверсий и выручки"
+    layout = dict(_BASE_LAYOUT)
+    layout["barmode"] = "group"
+    layout["yaxis"] = dict(title="")
+    layout["margin"] = dict(l=60, r=30, t=70, b=140)
 
-    fig.update_layout(
-        **_BASE_LAYOUT,
-        barmode="group",
-        yaxis=dict(
-            title="Доля, %",
-            ticksuffix="%",
-            rangemode="tozero",
-        ),
-    )
+    if kind == "multi":
+        layout["shapes"] = campaignseparatorshapes(result, data)
 
-    fig.update_layout(margin=dict(l=60, r=30, t=70, b=140))
-
-    if result.channel_col and result.campaign_col:
-        fig.update_xaxes(type="multicategory", tickangle=-35, automargin=True)
-    else:
-        fig.update_xaxes(tickangle=-35, automargin=True)
+    fig.update_layout(layout)
+    _apply_segment_xaxis(fig, kind)
 
     return PlotlySpec(
-        title=title,
-        html=_to_html(fig, title),
-        description=(
-            "График показывает, как по каждому сегменту соотносятся "
-            "доля затрат, доля конверсий и доля выручки."
-        ),
+        title="Сравнение долей",
+        html=_to_html(fig, "Сравнение долей"),
+        description="Сравнивает долю расходов и долю конверсий по сегментам.",
     )
 
 def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
@@ -2100,4 +2132,77 @@ def month_metric_lines_result(result: AnalysisResult, value_col: str, color: str
         title=title,
         html=_to_html(fig, title),
         description="Помесячная динамика с разбивкой по выбранным сегментам.",
+    )
+
+def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
+    """Сравнение долей затрат, конверсий и выручки по сегментам."""
+    df = result.metrics.copy()
+
+    needed = ("cost_share", "conv_share", "revenue_share")
+    available = [c for c in needed if c in df.columns and df[c].notna().any()]
+    if len(available) < 2:
+        return None
+
+    df = df.dropna(subset=available, how="all").copy()
+    if df.empty:
+        return None
+
+    if result.channel_col and result.campaign_col:
+        if result.campaign_col not in df.columns or result.channel_col not in df.columns:
+            return None
+        df = df.sort_values([result.campaign_col, result.channel_col], ascending=[True, True]).reset_index(drop=True)
+        x = [
+            df[result.campaign_col].astype(str).tolist(),
+            df[result.channel_col].astype(str).tolist(),
+        ]
+        x_kind = "multi"
+    else:
+        sort_col = "conv_share" if "conv_share" in available else available[0]
+        df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+        x = df[result.group_col].astype(str).tolist()
+        x_kind = "flat"
+
+    labels = {
+        "cost_share": "Доля затрат",
+        "conv_share": "Доля конверсий",
+        "revenue_share": "Доля выручки",
+    }
+    colors = {
+        "cost_share": "#C65D3A",
+        "conv_share": "#2E8B57",
+        "revenue_share": "#2F6DB3",
+    }
+
+    fig = go.Figure()
+
+    for col in available:
+        fig.add_trace(
+            go.Bar(
+                x=x,
+                y=pd.to_numeric(df[col], errors="coerce").fillna(0).tolist(),
+                name=labels[col],
+                marker_color=colors[col],
+                text=[f"{v:.1f}%" if pd.notna(v) else "" for v in df[col]],
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate=f"{labels[col]}: %{{y:.2f}}%<extra></extra>",
+            )
+        )
+
+    layout = dict(_BASE_LAYOUT)
+    layout["barmode"] = "group"
+    layout["margin"] = dict(l=60, r=30, t=70, b=140)
+    layout["yaxis"] = dict(title="Доля, %", ticksuffix="%", rangemode="tozero")
+    fig.update_layout(layout)
+
+    if x_kind == "multi":
+        fig.update_xaxes(type="multicategory", tickangle=-35, automargin=True)
+    else:
+        fig.update_xaxes(tickangle=-35, automargin=True)
+
+    title = "Сравнение долей"
+    return PlotlySpec(
+        title=title,
+        html=_to_html(fig, title),
+        description="Сравнение доли затрат, конверсий и выручки по сегментам.",
     )
