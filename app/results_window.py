@@ -586,7 +586,14 @@ class ResultsWindow(QWidget):
         self.chart_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.chart_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         for spec in specs:
-            QListWidgetItem(spec.title, self.chart_list)
+            sidebar_title_map = {
+                "CTR, %": "CTR, столбчатая диаграмма",
+                "CVR, %": "CVR, столбчатая диаграмма",
+                "CPA": "CPA, столбчатая диаграмма",
+                "CPC": "CPC, столбчатая диаграмма",
+            }
+            item = QListWidgetItem(sidebar_title_map.get(spec.title, spec.title))
+            self.chart_list.addItem(item)
         self.chart_list.currentRowChanged.connect(self._on_chart_changed)
         sidebar_layout.addWidget(self.chart_list, 1)
 

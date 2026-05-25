@@ -190,7 +190,7 @@ def month_funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
-        description="Помесячная динамика по выбранным каналам, кампаниям или их сочетаниям.",
+        description="Динамика по выбранным каналам, кампаниям или их сочетаниям.",
     )
 
 
@@ -378,7 +378,7 @@ def _monthly_metric_specs_by_channel(result: AnalysisResult) -> list[PlotlySpec]
                 PlotlySpec(
                     title=title,
                     html=_to_html_with_channel_switch(channel_figures, title),
-                    description=f"Сравнение кампаний внутри выбранного канала по показателю «{result.metric_labels.get(metric, metric)}».",
+                    description=f"Сравнение кампаний внутри выбранного канала по показателю {result.metric_labels.get(metric, metric).lower()}.",
                 )
             )
 
@@ -719,7 +719,7 @@ def _month_single_metric_chart(
         return PlotlySpec(
             title=title,
             html=_to_html_with_channel_switch(figures_by_channel, title),
-            description=f"Помесячная динамика метрики «{label}» с переключением по каналам.",
+            description=f"Динамика показателя «{label}» с переключением по каналам.",
         )
 
     # ---------- обычный режим ----------
@@ -774,7 +774,7 @@ def _month_single_metric_chart(
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
-        description=f"Помесячная динамика метрики «{label}».",
+        description=f"Динамика показателя «{label}».",
     )
 
 def _build_monthly_split_specs(result: AnalysisResult) -> list[PlotlySpec]:
@@ -878,7 +878,7 @@ def month_volume_combo_result(result: AnalysisResult) -> PlotlySpec | None:
         title=title,
         html=_to_html(fig, title),
         description=(
-            "Помесячная динамика объёмных метрик. "
+            "Динамика объёмных метрик. "
             "Если выбраны и кампании, и каналы, показаны только top-5 сочетаний."
         ),
     )
@@ -982,7 +982,7 @@ def month_kpi_combo_result(result: AnalysisResult) -> PlotlySpec | None:
         title=title,
         html=_to_html(fig, title),
         description=(
-            "Помесячная динамика KPI. "
+            "Динамика KPI. "
             "Если выбраны и кампании, и каналы, показаны только top-5 сочетаний."
         ),
     )
@@ -1175,7 +1175,7 @@ def _funnel_combo(result: AnalysisResult) -> PlotlySpec | None:
     return PlotlySpec(
         title=charttitle,
         html=_to_html(fig, charttitle),
-        description="Показывает показы, клики и конверсии по сегментам.",
+        description="",
     )
 
 
@@ -1796,7 +1796,7 @@ def _extra_category_chart(result: AnalysisResult) -> PlotlySpec | None:
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
-        description=f"Сравнение категорий «{cat_col}» по показателю «{pretty_metric}».",
+        description=f"Сравнение категорий «{cat_col}» по показателю «{pretty_metric.lower()}».",
     )
 
 
@@ -1983,7 +1983,7 @@ def _kpi_heatmap_grouped(result: AnalysisResult) -> PlotlySpec | None:
         html=_to_html(fig, "Тепловая карта KPI"),
         description=(
             "Цвет показывает отклонение KPI от среднего, строки сгруппированы по кампаниям, "
-            "внутри группы показаны каналы, а в ячейках отображаются фактические значения."
+            "внутри группы показаны каналы, в ячейках отображаются фактические значения."
         ),
     )
 
@@ -2287,7 +2287,7 @@ def month_metric_lines_result(result: AnalysisResult, value_col: str, color: str
     return PlotlySpec(
         title=title,
         html=_to_html(fig, title),
-        description="Помесячная динамика с разбивкой по выбранным сегментам.",
+        description="Динамика с разбивкой по выбранным сегментам.",
     )
 
 def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
