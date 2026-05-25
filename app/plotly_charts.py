@@ -45,6 +45,94 @@ def _series_colors() -> tuple[tuple[str, str], ...]:
         ("CPA", "#BE185D"),
     )
 
+def _bar_labels_enabled(n_bars: int, n_series: int = 1) -> bool:
+    """Показывать подписи только на достаточно компактных столбчатых графиках."""
+    return n_bars <= 8 and n_series <= 3
+
+
+def _format_bar_labels(values, metric: str) -> list[str]:
+    out: list[str] = []
+
+    for v in values:
+        if v is None or pd.isna(v):
+            out.append("")
+            continue
+
+        v = float(v)
+
+        if metric in {"CTR", "CVR", "cost_share", "conv_share", "revenue_share"}:
+            out.append(f"{v:.1f}%")
+        elif metric in {"CPC", "CPA", "AOV", "ROAS"}:
+            out.append(f"{v:.2f}")
+        elif abs(v) >= 1_000_000:
+            out.append(f"{v / 1_000_000:.1f}M")
+        elif abs(v) >= 1_000:
+            out.append(f"{v / 1_000:.1f}K")
+        else:
+            out.append(f"{v:.0f}")
+
+    return out
+
+
+def _bar_text_params(values, metric: str, n_bars: int, n_series: int = 1) -> dict:
+    return {
+        "text": _format_bar_labels(values, metric),
+        "textposition": "outside",
+        "cliponaxis": False,
+        "textfont": dict(size=11),
+    }
+
+def _y_axis_with_headroom(values, title: str, *, percent: bool = False) -> dict:
+    vals = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    ymax = float(vals.max()) if not vals.empty else 0.0
+
+    if ymax <= 0:
+        ymax = 1.0
+
+    top = ymax * 1.18
+
+    axis = {
+        "title": title,
+        "range": [0, top],
+        "rangemode": "tozero",
+    }
+
+    if percent:
+        axis["ticksuffix"] = "%"
+
+    return axis
+
+def campaignseparatorshapes(result: AnalysisResult, data: pd.DataFrame) -> list[dict]:
+    """Вертикальные разделители между группами кампаний."""
+    if not (
+        result.channel_col
+        and result.campaign_col
+        and result.channel_col in data.columns
+        and result.campaign_col in data.columns
+    ):
+        return []
+
+    campaigns = data[result.campaign_col].astype(str).tolist()
+    if len(campaigns) < 2:
+        return []
+
+    shapes: list[dict] = []
+    for i in range(1, len(campaigns)):
+        if campaigns[i] != campaigns[i - 1]:
+            shapes.append(
+                dict(
+                    type="line",
+                    xref="x",
+                    yref="paper",
+                    x0=i - 0.5,
+                    x1=i - 0.5,
+                    y0=0,
+                    y1=1,
+                    line=dict(color="rgba(120,120,120,0.40)", width=1),
+                    layer="below",
+                )
+            )
+    return shapes
 
 def _funnel_title(cols: list[str]) -> str:
     names = [_FUNNEL_LABELS[c] for c in cols]
@@ -1191,131 +1279,88 @@ def _ranking_bar(result: AnalysisResult, value_col: str, color: str) -> PlotlySp
         return None
 
     pretty_name = result.metric_labels.get(value_col, value_col)
+    is_percent = value_col in {"CTR", "CVR", "cost_share", "conv_share", "revenue_share"}
 
     has_campaign_and_channel = (
         bool(result.channel_col)
         and bool(result.campaign_col)
-        and {result.channel_col, result.campaign_col}.issubset(data.columns)
+        and result.channel_col in data.columns
+        and result.campaign_col in data.columns
     )
 
     if has_campaign_and_channel:
         data = data.sort_values(
             [result.campaign_col, result.channel_col],
             ascending=[True, True]
-        ).copy()
+        ).reset_index(drop=True)
 
+        x = list(range(len(data)))
         x_labels = data[result.channel_col].astype(str).tolist()
-        campaigns = data[result.campaign_col].astype(str).tolist()
-
-        annotations = []
-        shapes = []
-
-        n = len(campaigns)
-        start = 0
-        current = campaigns[0]
-
-        for i, camp in enumerate(campaigns[1:], start=1):
-            if camp != current:
-                annotations.append(dict(
-                    x=(start + i - 1) / 2,
-                    y=-0.30,
-                    xref="x",
-                    yref="paper",
-                    text=current,
-                    showarrow=False,
-                    xanchor="center",
-                    yanchor="top",
-                    font=dict(size=11)
-                ))
-
-                # Верхний разделитель в paper-координатах
-                x_paper = i / n
-                shapes.append(
-                    dict(
-                        type="line",
-                        xref="x",
-                        yref="paper",
-                        x0=i - 0.5,
-                        x1=i - 0.5,
-                        y0=0,
-                        y1=1,
-                        line=dict(color="rgba(120,120,120,0.35)", width=1),
-                        layer="below",
-                    )
-                )
-
-                start = i
-                current = camp
-
-        annotations.append(dict(
-            x=(start + len(campaigns) - 1) / 2,
-            y=-0.30,
-            xref="x",
-            yref="paper",
-            text=current,
-            showarrow=False,
-            xanchor="center",
-            yanchor="top",
-            font=dict(size=11)
-        ))
-
-        top_margin = 95
-        bottom_margin = 165
-
         customdata = np.column_stack([
             data[result.campaign_col].astype(str).to_numpy(),
-            data[result.channel_col].astype(str).to_numpy()
+            data[result.channel_col].astype(str).to_numpy(),
         ])
-        hovertemplate = (
-            "Кампания: %{customdata[0]}<br>"
-            "Канал: %{customdata[1]}<br>"
-            f"{pretty_name}: %{{y:.2f}}<extra></extra>"
-        )
-
+        hover_head = "%{customdata[0]}<br>%{customdata[1]}<br>"
+        shapes = campaignseparatorshapes(result, data)
+        bottom_margin = 140
     else:
-        data = data.sort_values(value_col, ascending=False).copy()
-        x_labels = data[result.group_col].astype(str).tolist()
-        annotations = []
-        shapes = []
-        top_margin = 70
-        bottom_margin = 130
+        data = data.sort_values(value_col, ascending=False).reset_index(drop=True)
 
-        customdata = np.column_stack([data[result.group_col].astype(str).to_numpy()])
-        hovertemplate = (
-            "Сегмент: %{customdata[0]}<br>"
-            f"{pretty_name}: %{{y:.2f}}<extra></extra>"
-        )
+        x = list(range(len(data)))
+        x_labels = data[result.group_col].astype(str).tolist()
+        customdata = np.column_stack([
+            data[result.group_col].astype(str).to_numpy(),
+        ])
+        hover_head = "%{customdata[0]}<br>"
+        shapes = []
+        bottom_margin = 120
+
+    vals = pd.to_numeric(data[value_col], errors="coerce").fillna(0).tolist()
+
+    if value_col in {"CTR", "CVR", "cost_share", "conv_share", "revenue_share"}:
+        hover_value = f"{pretty_name}: %{{y:.2f}}%<extra></extra>"
+    elif value_col in {"CPC", "CPA", "AOV", "ROAS"}:
+        hover_value = f"{pretty_name}: %{{y:,.2f}}<extra></extra>"
+    else:
+        hover_value = f"{pretty_name}: %{{y:,.0f}}<extra></extra>"
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=list(range(len(data))),
-        y=data[value_col].astype(float).fillna(0),
-        marker_color=color,
-        customdata=customdata,
-        hovertemplate=hovertemplate
-    ))
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=vals,
+            marker_color=color,
+            customdata=customdata,
+            hovertemplate=hover_head + hover_value,
+            **_bar_text_params(
+                vals,
+                metric=value_col,
+                n_bars=len(data),
+                n_series=1,
+            ),
+        )
+    )
 
     layout = dict(_BASE_LAYOUT)
-    layout["margin"] = dict(l=60, r=30, t=top_margin, b=bottom_margin)
-    layout["title"] = dict(text=f"{pretty_name} — ранжирование", x=0.02, xanchor="left")
+    layout["title"] = dict(text=pretty_name, x=0.02, xanchor="left")
     layout["showlegend"] = False
-    layout["annotations"] = annotations
-    layout["shapes"] = shapes
+    layout["margin"] = dict(l=60, r=30, t=90, b=bottom_margin)
     layout["xaxis"] = dict(
         tickmode="array",
-        tickvals=list(range(len(data))),
+        tickvals=x,
         ticktext=x_labels,
         tickangle=-35,
         automargin=True,
     )
-    layout["yaxis"] = dict(title=pretty_name)
+    layout["yaxis"] = _y_axis_with_headroom(vals, pretty_name, percent=is_percent)
+    layout["shapes"] = shapes
 
-    fig.update_layout(**layout)
+    fig.update_layout(layout)
 
     return PlotlySpec(
-        title=f"{pretty_name} — ранжирование",
-        html=_to_html(fig, f"{pretty_name} — ранжирование"),
-        description=f"Сегменты упорядочены по показателю «{pretty_name}».",
+        title=pretty_name,
+        html=_to_html(fig, pretty_name),
+        description=f"Сравнение по показателю «{pretty_name}».",
     )
 
 
@@ -1963,55 +2008,100 @@ def build_plotly_charts(result: AnalysisResult) -> list[PlotlySpec]:
     return specs
 
 def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
-    m = result.metrics
-    cols = [c for c in ("costshare", "convshare") if c in m.columns]
-    if not cols:
+    """Сравнение доли затрат, конверсий и выручки по сегментам."""
+    df = result.metrics.copy()
+
+    needed = ("cost_share", "conv_share", "revenue_share")
+    available = [c for c in needed if c in df.columns and df[c].notna().any()]
+    if len(available) < 2:
         return None
 
-    data = m.dropna(subset=cols, how="all")
-    if data.empty:
+    df = df.dropna(subset=available, how="all").copy()
+    if df.empty:
         return None
 
-    data = _sorted_for_segments(result, data, "convshare" if "convshare" in cols else cols[0])
-    x, kind = _segment_x(result, data)
+    if result.channel_col and result.campaign_col:
+        if result.campaign_col not in df.columns or result.channel_col not in df.columns:
+            return None
 
-    pretty = {
-        "costshare": "Доля расходов, %",
-        "convshare": "Доля конверсий, %",
+        df = df.sort_values(
+            [result.campaign_col, result.channel_col],
+            ascending=[True, True]
+        ).reset_index(drop=True)
+
+        x = list(range(len(df)))
+        x_labels = df[result.channel_col].astype(str).tolist()
+        shapes = campaignseparatorshapes(result, df)
+    else:
+        sort_col = "conv_share" if "conv_share" in available else available[0]
+        df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
+        x = df[result.group_col].astype(str).tolist()
+        x_labels = None
+        shapes = []
+
+    labels = {
+        "cost_share": "Доля затрат",
+        "conv_share": "Доля конверсий",
+        "revenue_share": "Доля выручки",
     }
     colors = {
-        "costshare": "#CC6677",
-        "convshare": "#117733",
+        "cost_share": "#C65D3A",
+        "conv_share": "#2E8B57",
+        "revenue_share": "#2F6DB3",
     }
 
     fig = go.Figure()
 
-    for c in cols:
+    for col in available:
+        vals = pd.to_numeric(df[col], errors="coerce").fillna(0).tolist()
         fig.add_trace(
             go.Bar(
                 x=x,
-                y=data[c].astype(float),
-                name=pretty[c],
-                marker_color=colors[c],
-                hovertemplate=f"%{{x}}<br>{pretty[c]}: %{{y:.2f}}<extra></extra>",
+                y=vals,
+                name=labels[col],
+                marker_color=colors[col],
+                hovertemplate=f"{labels[col]}: %{{y:.2f}}%<extra></extra>",
+                **_bar_text_params(
+                    vals,
+                    metric=col,
+                    n_bars=len(df),
+                    n_series=len(available),
+                ),
             )
         )
 
     layout = dict(_BASE_LAYOUT)
     layout["barmode"] = "group"
-    layout["yaxis"] = dict(title="")
     layout["margin"] = dict(l=60, r=30, t=70, b=140)
+    layout["yaxis"] = dict(
+        title="Доля, %",
+        ticksuffix="%",
+        rangemode="tozero",
+    )
+    layout["shapes"] = shapes
 
-    if kind == "multi":
-        layout["shapes"] = campaignseparatorshapes(result, data)
+    if result.channel_col and result.campaign_col:
+        layout["xaxis"] = dict(
+            tickmode="array",
+            tickvals=list(range(len(df))),
+            ticktext=x_labels,
+            tickangle=-35,
+            automargin=True,
+        )
+    else:
+        layout["xaxis"] = dict(
+            tickangle=-35,
+            automargin=True,
+        )
 
     fig.update_layout(layout)
-    _apply_segment_xaxis(fig, kind)
 
+    title = "Сравнение долей"
     return PlotlySpec(
-        title="Сравнение долей",
-        html=_to_html(fig, "Сравнение долей"),
-        description="Сравнивает долю расходов и долю конверсий по сегментам.",
+        title=title,
+        html=_to_html(fig, title),
+        description="Сравнение доли затрат, конверсий и выручки по сегментам.",
     )
 
 def _heatmap_kpi(result: AnalysisResult) -> PlotlySpec | None:
@@ -2135,7 +2225,7 @@ def month_metric_lines_result(result: AnalysisResult, value_col: str, color: str
     )
 
 def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
-    """Сравнение долей затрат, конверсий и выручки по сегментам."""
+    """Сравнение доли затрат, конверсий и выручки по сегментам."""
     df = result.metrics.copy()
 
     needed = ("cost_share", "conv_share", "revenue_share")
@@ -2150,20 +2240,22 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
     if result.channel_col and result.campaign_col:
         if result.campaign_col not in df.columns or result.channel_col not in df.columns:
             return None
+
         df = df.sort_values(
             [result.campaign_col, result.channel_col],
             ascending=[True, True]
         ).reset_index(drop=True)
-        x = [
-            df[result.campaign_col].astype(str).tolist(),
-            df[result.channel_col].astype(str).tolist(),
-        ]
-        kind = "multi"
+
+        x = list(range(len(df)))
+        x_labels = df[result.channel_col].astype(str).tolist()
+        shapes = campaignseparatorshapes(result, df)
     else:
         sort_col = "conv_share" if "conv_share" in available else available[0]
         df = df.sort_values(sort_col, ascending=False).reset_index(drop=True)
+
         x = df[result.group_col].astype(str).tolist()
-        kind = "flat"
+        x_labels = None
+        shapes = []
 
     labels = {
         "cost_share": "Доля затрат",
@@ -2178,36 +2270,49 @@ def build_share_comparison_chart(result: AnalysisResult) -> PlotlySpec | None:
 
     fig = go.Figure()
 
+    max_vals = []
+
     for col in available:
+        vals = pd.to_numeric(df[col], errors="coerce").fillna(0).tolist()
+        max_vals.extend(vals)
+
         fig.add_trace(
             go.Bar(
                 x=x,
-                y=pd.to_numeric(df[col], errors="coerce").fillna(0).tolist(),
+                y=vals,
                 name=labels[col],
                 marker_color=colors[col],
-                text=[f"{v:.1f}%" if pd.notna(v) else "" for v in df[col]],
-                textposition="outside",
-                cliponaxis=False,
                 hovertemplate=f"{labels[col]}: %{{y:.2f}}%<extra></extra>",
+                **_bar_text_params(
+                    vals,
+                    metric=col,
+                    n_bars=len(df),
+                    n_series=len(available),
+                ),
             )
         )
 
     layout = dict(_BASE_LAYOUT)
     layout["barmode"] = "group"
-    layout["margin"] = dict(l=60, r=30, t=70, b=140)
-    layout["yaxis"] = dict(
-        title="Доля, %",
-        ticksuffix="%",
-        rangemode="tozero",
-    )
+    layout["margin"] = dict(l=60, r=30, t=90, b=140)
+    layout["yaxis"] = _y_axis_with_headroom(max_vals, "Доля, %", percent=True)
+    layout["shapes"] = shapes
 
     if result.channel_col and result.campaign_col:
-        layout["shapes"] = campaignseparatorshapes(result, df)
+        layout["xaxis"] = dict(
+            tickmode="array",
+            tickvals=list(range(len(df))),
+            ticktext=x_labels,
+            tickangle=-35,
+            automargin=True,
+        )
+    else:
+        layout["xaxis"] = dict(
+            tickangle=-35,
+            automargin=True,
+        )
 
     fig.update_layout(layout)
-
-    _apply_segment_xaxis(fig, kind)
-    fig.update_xaxes(tickangle=-35, automargin=True)
 
     title = "Сравнение долей"
     return PlotlySpec(
