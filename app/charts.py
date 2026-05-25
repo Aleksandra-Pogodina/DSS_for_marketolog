@@ -1,7 +1,7 @@
-"""Графики для DOCX-отчёта: matplotlib/seaborn → PNG.
+"""Графики для DOCX-отчёта: matplotlib/seaborn -> PNG.
 
+Модуль строит статические PNG-графики для последующей вставки в DOCX.
 Каждый build_* возвращает объект Chart с заголовком, путём к PNG и описанием.
-PNG-формат удобен для встраивания в DOCX без повторной отрисовки.
 """
 
 from __future__ import annotations
@@ -49,32 +49,38 @@ def _truncate(s, limit: int = 22) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _segment_y_labels(result: AnalysisResult, df: pd.DataFrame) -> list[str]:
-    """Для horizontal bar: если есть и кампания, и канал — две строки в подписи."""
-    if result.channel_col and result.campaign_col and {result.channel_col, result.campaign_col}.issubset(df.columns):
-        return [f"{_truncate(camp, 18)}\n— {_truncate(chan, 18)}"
-                for camp, chan in zip(df[result.campaign_col].astype(str),
-                                      df[result.channel_col].astype(str))]
-    return [_truncate(v) for v in df[result.group_col].astype(str)]
+def _has_cols(df: pd.DataFrame, cols: list[str | None]) -> bool:
+    real = [c for c in cols if c]
+    return bool(real) and all(c in df.columns for c in real)
+
+
+def _has_metric(df: pd.DataFrame, col: str) -> bool:
+    return col in df.columns and df[col].notna().any()
 
 
 def _segment_x_labels(result: AnalysisResult, df: pd.DataFrame) -> list[str]:
-    """Для vertical bar: две строки (канал / кампания)."""
-    if result.channel_col and result.campaign_col and {result.channel_col, result.campaign_col}.issubset(df.columns):
-        return [f"{_truncate(chan, 14)}\n{_truncate(camp, 14)}"
-                for camp, chan in zip(df[result.campaign_col].astype(str),
-                                      df[result.channel_col].astype(str))]
-    return [_truncate(v) for v in df[result.group_col].astype(str)]
+    """Для vertical bar: две строки (канал / кампания), если доступны оба поля."""
+    if (
+        result.channel_col
+        and result.campaign_col
+        and _has_cols(df, [result.channel_col, result.campaign_col])
+    ):
+        return [
+            f"{_truncate(chan, 14)}\n{_truncate(camp, 14)}"
+            for camp, chan in zip(
+                df[result.campaign_col].astype(str),
+                df[result.channel_col].astype(str),
+            )
+        ]
+    return [_truncate(v, 18) for v in df[result.group_col].astype(str)]
 
 
 def _campaign_group_annotations(result: AnalysisResult, df: pd.DataFrame) -> list[tuple[float, str]]:
-    """
-    Возвращает список (x_center, campaign_label) для групповых подписей кампаний.
-    """
+    """Возвращает список (x_center, campaign_label) для групповых подписей кампаний."""
     if not (
         result.channel_col
         and result.campaign_col
-        and {result.channel_col, result.campaign_col}.issubset(df.columns)
+        and _has_cols(df, [result.channel_col, result.campaign_col])
         and not df.empty
     ):
         return []
@@ -92,6 +98,107 @@ def _campaign_group_annotations(result: AnalysisResult, df: pd.DataFrame) -> lis
     groups.append((start, len(campaigns) - 1, current))
 
     return [((start + end) / 2, _truncate(camp, 18)) for start, end, camp in groups]
+
+
+def _line_by_campaign_channel(
+    result: AnalysisResult,
+    metric_cols: list[str],
+    title: str,
+    tmpdir: str,
+) -> Chart | None:
+    """
+    Линейный график строится только если выбраны И кампании, И каналы.
+    Для каждой метрики рисуется отдельная панель, внутри которой линии = каналы.
+    """
+    m = result.metrics
+
+    if not (
+        result.campaign_col
+        and result.channel_col
+        and _has_cols(m, [result.campaign_col, result.channel_col])
+    ):
+        return None
+
+    present = [c for c in metric_cols if _has_metric(m, c)]
+    if not present:
+        return None
+
+    data = m.dropna(subset=[result.campaign_col, result.channel_col], how="any").copy()
+    if data.empty:
+        return None
+
+    campaigns = data[result.campaign_col].astype(str).dropna().unique().tolist()
+    channels = data[result.channel_col].astype(str).dropna().unique().tolist()
+    if not campaigns or not channels:
+        return None
+
+    n = len(present)
+    fig, axes = plt.subplots(
+        nrows=n,
+        ncols=1,
+        figsize=(max(10, 0.9 * len(campaigns) + 4), max(3.6 * n, 4.2)),
+        squeeze=False,
+    )
+    axes = axes.ravel()
+
+    palette = sns.color_palette("tab10", n_colors=max(len(channels), 3))
+
+    for ax, metric in zip(axes, present):
+        plot_df = data[[result.campaign_col, result.channel_col, metric]].copy()
+        plot_df = plot_df.dropna(subset=[metric])
+        if plot_df.empty:
+            ax.set_visible(False)
+            continue
+
+        pivot = plot_df.pivot_table(
+            index=result.campaign_col,
+            columns=result.channel_col,
+            values=metric,
+            aggfunc="sum",
+            fill_value=np.nan,
+            observed=True,
+        )
+
+        if pivot.empty:
+            ax.set_visible(False)
+            continue
+
+        pivot = pivot.reindex(campaigns)
+        x = np.arange(len(pivot.index))
+
+        for i, channel in enumerate(pivot.columns.astype(str)):
+            y = pivot[channel].astype(float).values
+            if np.all(pd.isna(y)):
+                continue
+
+            ax.plot(
+                x,
+                y,
+                marker="o",
+                linewidth=2.0,
+                markersize=5,
+                label=_truncate(channel, 18),
+                color=palette[i % len(palette)],
+            )
+
+        ax.set_title(result.metric_labels.get(metric, metric), loc="left")
+        ax.set_xticks(x)
+        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=0, fontsize=9)
+        ax.set_ylabel(result.metric_labels.get(metric, metric))
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.legend(title="Канал", fontsize=8, title_fontsize=9, loc="best")
+
+    fig.suptitle(title, fontsize=14, y=1.02)
+    path = _new_path("line_campaign_channel", tmpdir)
+    _save(fig, path)
+    return Chart(
+        title=title,
+        path=path,
+        description=(
+            "Линии показывают динамику/различия по выбранным метрикам между каналами "
+            "в разрезе кампаний. График строится только если выбраны и кампании, и каналы."
+        ),
+    )
 
 
 def _bar_chart(
@@ -113,13 +220,13 @@ def _bar_chart(
     has_campaign_and_channel = (
         bool(result.channel_col)
         and bool(result.campaign_col)
-        and {result.channel_col, result.campaign_col}.issubset(data.columns)
+        and _has_cols(data, [result.channel_col, result.campaign_col])
     )
 
     if has_campaign_and_channel:
         data = data.sort_values(
             [result.campaign_col, result.channel_col],
-            ascending=[True, True]
+            ascending=[True, True],
         ).copy()
         x_labels = [_truncate(v, 14) for v in data[result.channel_col].astype(str)]
     else:
@@ -131,7 +238,6 @@ def _bar_chart(
 
     fig_width = max(9, 0.75 * len(data) + 3)
     fig, ax = plt.subplots(figsize=(fig_width, 6))
-
     bars = ax.bar(x, values, color=color, width=0.72)
 
     ax.set_title(title)
@@ -189,60 +295,90 @@ def _bar_chart(
         description=f"Сегменты упорядочены по «{ylabel}».",
     )
 
-def _funnel_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    """Показы / клики / конверсии — только из реально доступных."""
-    cols_available = [c for c in ("displays", "clicks", "conversions") if c in result.metrics.columns]
-    if len(cols_available) < 2:
+
+def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
+    """Сравнение 3 долей: затрат, выручки, конверсий."""
+    m = result.metrics
+    cols = [c for c in ("cost_share", "revenue_share", "conv_share") if _has_metric(m, c)]
+    if len(cols) < 2:
         return None
 
-    sort_metric = "conversions" if "conversions" in cols_available else cols_available[0]
-    if result.channel_col and result.campaign_col:
-        data = result.metrics.sort_values([result.campaign_col, sort_metric],
-                                          ascending=[True, False]).copy()
+    data = m.dropna(subset=cols, how="all").copy()
+    if data.empty:
+        return None
+
+    sort_metric = "conv_share" if "conv_share" in cols else cols[0]
+    if result.channel_col and result.campaign_col and _has_cols(data, [result.channel_col, result.campaign_col]):
+        data = data.sort_values([result.campaign_col, sort_metric], ascending=[True, False]).copy()
     else:
-        data = result.metrics.sort_values(sort_metric, ascending=False).copy()
+        data = data.sort_values(sort_metric, ascending=False).copy()
 
-    pretty = {"displays": "Показы", "clicks": "Клики", "conversions": "Конверсии"}
-    colors = {"displays": "#88CCEE", "clicks": "#4477AA", "conversions": "#117733"}
-
-    n = len(data)
-    width = 0.8 / len(cols_available)
-    fig, ax = plt.subplots(figsize=(max(8, 0.7 * n + 3), 5.5))
+    labels = _segment_x_labels(result, data)
+    n = len(labels)
+    width = 0.24
+    fig, ax = plt.subplots(figsize=(max(8, 0.8 * n + 3), 5.4))
     x = np.arange(n)
-    for i, col in enumerate(cols_available):
-        offset = (i - (len(cols_available) - 1) / 2) * width
-        ax.bar(x + offset, data[col].astype(float).fillna(0),
-               width=width, label=pretty[col], color=colors.get(col))
+
+    pretty = {
+        "cost_share": "Доля затрат, %",
+        "revenue_share": "Доля выручки, %",
+        "conv_share": "Доля конверсий, %",
+    }
+    colors = {
+        "cost_share": "#CC6677",
+        "revenue_share": "#4477AA",
+        "conv_share": "#117733",
+    }
+
+    for i, c in enumerate(cols):
+        offset = (i - (len(cols) - 1) / 2) * width
+        ax.bar(
+            x + offset,
+            data[c].astype(float).fillna(0),
+            width=width,
+            label=pretty[c],
+            color=colors[c],
+        )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(_segment_x_labels(result, data), rotation=0, fontsize=9)
-    names = [pretty[c] for c in cols_available]
-    if len(names) == 2:
-        chart_title = f"{names[0]} и {names[1].lower()}"
-    else:
-        chart_title = f"{names[0]}, " + ", ".join(n.lower() for n in names[1:-1]) + f" и {names[-1].lower()}"
-    ax.set_title(chart_title)
-    ax.set_ylabel("Значение")
+    ax.set_xticklabels(labels, rotation=0, fontsize=9)
+    ax.set_ylabel("%")
+    ax.set_title("Сравнение долей: затраты, выручка, конверсии")
     ax.legend()
 
-    path = _new_path("funnel", tmpdir)
+    path = _new_path("shares3", tmpdir)
     _save(fig, path)
-    return Chart(title=chart_title, path=path,
-                 description="Сравнение показов / кликов / конверсий по сегментам.")
+    return Chart(
+        title="Сравнение долей: затраты, выручка, конверсии",
+        path=path,
+        description="Сравнивает доли затрат, выручки и конверсий по каждому сегменту.",
+    )
 
 
 def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -> Chart | None:
     """Тепловая карта KPI: цвет — отклонение от среднего в σ, в клетках — реальные значения."""
     m = result.metrics
-    present = [c for c in cols if c in m.columns and m[c].notna().any()]
+    present = [c for c in cols if _has_metric(m, c)]
     if len(present) < 2:
         return None
 
-    data = m[[result.group_col] + present].copy().set_index(result.group_col).astype(float)
+    base_cols = [result.group_col] + present
+    if result.channel_col and result.channel_col in m.columns:
+        base_cols.append(result.channel_col)
+    if result.campaign_col and result.campaign_col in m.columns:
+        base_cols.append(result.campaign_col)
 
-    z = data.copy()
+    data = m[base_cols].copy().set_index(result.group_col)
     for c in present:
-        col = data[c]
+        data[c] = pd.to_numeric(data[c], errors="coerce")
+
+    numeric = data[present].copy()
+    if numeric.dropna(how="all").empty:
+        return None
+
+    z = numeric.copy()
+    for c in present:
+        col = numeric[c]
         mean = col.mean(skipna=True)
         std = col.std(skipna=True, ddof=0)
         if std and not pd.isna(std) and std > 0:
@@ -253,27 +389,43 @@ def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -
     abs_max = float(np.nanmax(np.abs(z.values))) if z.size else 1.0
     abs_max = max(abs_max, 0.5)
 
-    fig, ax = plt.subplots(figsize=(1.6 * len(present) + 3, max(4, 0.5 * len(data))))
+    fig, ax = plt.subplots(figsize=(1.7 * len(present) + 3, max(4, 0.5 * len(numeric))))
     sns.heatmap(
-        z, annot=data.round(2), fmt=".2f",
-        cmap="RdYlGn", center=0, vmin=-abs_max, vmax=abs_max,
+        z,
+        annot=numeric.round(2),
+        fmt=".2f",
+        cmap="RdYlGn",
+        center=0,
+        vmin=-abs_max,
+        vmax=abs_max,
         cbar_kws={"label": "", "shrink": 0.95},
-        ax=ax, linewidths=0.5, linecolor="white",
+        ax=ax,
+        linewidths=0.5,
+        linecolor="white",
     )
+
     ax.set_title(title)
     ax.set_ylabel("")
     ax.set_xticklabels([result.metric_labels.get(c, c) for c in present], rotation=30, ha="right")
-    # Метки по y — если есть две размерности, показываем «кампания · канал»
-    if result.channel_col and result.campaign_col:
-        info = m[[result.group_col, result.campaign_col, result.channel_col]].drop_duplicates(result.group_col)
-        info = info.set_index(result.group_col).loc[data.index]
+
+    if (
+        result.channel_col
+        and result.campaign_col
+        and _has_cols(m, [result.group_col, result.campaign_col, result.channel_col])
+    ):
+        info = (
+            m[[result.group_col, result.campaign_col, result.channel_col]]
+            .drop_duplicates(result.group_col)
+            .set_index(result.group_col)
+        )
+        info = info.loc[numeric.index]
 
         campaigns = info[result.campaign_col].astype(str).tolist()
         channels = info[result.channel_col].astype(str).tolist()
         y_labels = [_truncate(ch, 14) for ch in channels]
     else:
         campaigns = []
-        y_labels = [_truncate(v) for v in data.index.astype(str)]
+        y_labels = [_truncate(v) for v in numeric.index.astype(str)]
 
     ax.set_yticklabels(y_labels, rotation=0)
 
@@ -309,79 +461,90 @@ def _heatmap(result: AnalysisResult, cols: list[str], title: str, tmpdir: str) -
             fontweight="bold",
         )
 
-    path = _new_path("heatmap", tmpdir)
+    path = _new_path("heatmap_kpi", tmpdir)
     _save(fig, path)
     return Chart(
-        title=title, path=path,
+        title=title,
+        path=path,
         description=(
-            "Цвет показывает, насколько сегмент выше (зелёный) или ниже (красный) среднего "
-            "по этой метрике, в стандартных отклонениях. В клетках — фактические значения."
+            "Цвет показывает отклонение сегмента от среднего значения метрики "
+            "в стандартных отклонениях. Внутри ячеек указаны фактические значения."
         ),
     )
 
 
-def _correlation_heatmap(metrics: pd.DataFrame, labels: dict, tmpdir: str) -> Chart | None:
-    numeric = metrics.select_dtypes(include=[np.number]).dropna(axis=1, how="all")
-    if numeric.shape[1] < 3:
+def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
+    """График по дополнительному столбцу: строим только если extra-данные действительно есть."""
+    es = result.extra_summary
+    if es is None or es.empty or not result.extra_metric:
         return None
 
-    corr = numeric.corr()
-    fig, ax = plt.subplots(figsize=(0.7 * len(corr) + 3, 0.7 * len(corr) + 2))
-    sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", center=0,
-                vmin=-1, vmax=1, ax=ax, linewidths=0.5, linecolor="white")
-    cbar = ax.collections[0].colorbar
-    cbar.set_label("Отклонение от среднего, σ", rotation=270, labelpad=18)
-    display_labels = [labels.get(c, c) for c in corr.columns]
-    ax.set_xticklabels(display_labels, rotation=30, ha="right")
-    ax.set_yticklabels(display_labels, rotation=0)
-    ax.set_title("Корреляции между показателями")
-
-    path = _new_path("corr", tmpdir)
-    _save(fig, path)
-    return Chart(title="Корреляции между показателями", path=path,
-                 description="Коэффициенты корреляции Пирсона.")
-
-
-def _share_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    m = result.metrics
-    cols = [c for c in ("cost_share", "conv_share") if c in m.columns]
-    if not cols:
-        return None
-    data = m.dropna(subset=cols, how="all").copy()
-    if data.empty:
+    cat = result.extra_category_col
+    metric = result.extra_metric
+    if not cat or cat not in es.columns or metric not in es.columns:
         return None
 
-    sort_metric = "conv_share" if "conv_share" in cols else cols[0]
-    if result.channel_col and result.campaign_col:
-        data = data.sort_values([result.campaign_col, sort_metric], ascending=[True, False])
+    pretty = result.metric_labels.get(metric, metric)
+    chan = result.channel_col if result.channel_col and result.channel_col in es.columns else None
+
+    if chan:
+        pivot = es.pivot_table(index=cat, columns=chan, values=metric, aggfunc="sum", fill_value=0, observed=True)
+        if pivot.empty:
+            return None
+        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
+
+        fig, ax = plt.subplots(figsize=(max(8, 0.85 * len(pivot.index) + 3), 5.4))
+        n_cats = len(pivot.index)
+        n_chans = len(pivot.columns)
+        width = 0.8 / max(n_chans, 1)
+        x = np.arange(n_cats)
+        cmap = plt.get_cmap("tab10")
+
+        for i, c in enumerate(pivot.columns):
+            offset = (i - (n_chans - 1) / 2) * width
+            ax.bar(
+                x + offset,
+                pivot[c].astype(float),
+                width=width,
+                label=_truncate(c, 20),
+                color=cmap(i % 10),
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=15, ha="right")
+        ax.set_xlabel(str(cat))
+        ax.set_ylabel(pretty)
+        ax.set_title(f"{pretty}: {cat} × Каналы")
+        ax.legend(title="Канал", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
+
+        desc = f"Сравнение значений «{pretty}» по дополнительной категории «{cat}» в разрезе каналов."
+        chart_title = f"{pretty}: {cat} × Каналы"
     else:
-        data = data.sort_values(sort_metric, ascending=False)
+        data = es.groupby(cat, dropna=True)[metric].sum().sort_values(ascending=False)
+        if data.empty:
+            return None
 
-    labels = _segment_x_labels(result, data)
-    n = len(labels)
-    width = 0.4
-    fig, ax = plt.subplots(figsize=(max(7, 0.7 * n + 3), 5))
-    x = np.arange(n)
-    pretty = {"cost_share": "Доля затрат, %", "conv_share": "Доля конверсий, %"}
-    colors = {"cost_share": "#cc6677", "conv_share": "#117733"}
-    for i, c in enumerate(cols):
-        ax.bar(x + (i - (len(cols) - 1) / 2) * width, data[c].astype(float).fillna(0),
-               width=width, label=pretty[c], color=colors[c])
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=0, fontsize=9)
-    ax.set_ylabel("%")
-    ax.set_title("Доли затрат и конверсий")
-    ax.legend()
+        fig, ax = plt.subplots(figsize=(max(7, 0.75 * len(data) + 3), 5))
+        ax.bar(
+            [_truncate(v, 20) for v in data.index.astype(str)],
+            data.values.astype(float),
+            color="#1C8F9E",
+        )
+        ax.set_ylabel(pretty)
+        ax.set_xlabel(str(cat))
+        ax.set_title(f"{pretty} по «{cat}»")
+        plt.xticks(rotation=15, ha="right")
 
-    path = _new_path("shares", tmpdir)
+        desc = f"Суммарное значение «{pretty}» по дополнительной категории «{cat}»."
+        chart_title = f"{pretty} по «{cat}»"
+
+    path = _new_path("extra_cat", tmpdir)
     _save(fig, path)
-    return Chart(
-        title="Доли затрат и конверсий", path=path,
-        description="Сравнивает, сколько бюджета забирает сегмент и какую долю конверсий приносит.",
-    )
+    return Chart(title=chart_title, path=path, description=desc)
 
 
 def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
+    """График по возрасту: строим только если age_table реально сформирована."""
     age_table = result.age_table
     if age_table is None or age_table.empty:
         return None
@@ -389,13 +552,17 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     metric = getattr(result, "age_metric", None)
     if not metric or metric not in age_table.columns:
         for cand in ("conversions", "revenue", "clicks", "displays"):
-            if cand in age_table.columns:
+            if cand in age_table.columns and age_table[cand].notna().any():
                 metric = cand
                 break
+
     if not metric or metric not in age_table.columns:
         return None
 
     age_col = "Возрастная группа"
+    if age_col not in age_table.columns:
+        return None
+
     pretty_metric = result.metric_labels.get(metric, metric)
 
     if (
@@ -404,18 +571,14 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         and result.campaign_col in age_table.columns
         and result.channel_col in age_table.columns
     ):
-        first_channel = (
-            age_table[result.channel_col]
-            .dropna()
-            .astype(str)
-            .iloc[0]
-            if not age_table[result.channel_col].dropna().empty
-            else None
-        )
+        first_channel_series = age_table[result.channel_col].dropna().astype(str)
+        first_channel = first_channel_series.iloc[0] if not first_channel_series.empty else None
         if first_channel is None:
             return None
 
         filtered = age_table[age_table[result.channel_col].astype(str) == first_channel].copy()
+        if filtered.empty:
+            return None
 
         pivot = filtered.pivot_table(
             index=age_col,
@@ -450,9 +613,10 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
         return None
 
     ordered_ages = [label for label in AGE_LABELS if label in pivot.index]
-    pivot = pivot.reindex(ordered_ages).fillna(0)
+    if ordered_ages:
+        pivot = pivot.reindex(ordered_ages).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 3), 5))
+    fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.columns) + 3), 5.2))
     pivot.plot(kind="bar", ax=ax, colormap="tab20")
 
     ax.set_xlabel("Возрастная группа")
@@ -470,91 +634,50 @@ def _age_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
     )
 
 
-def _extra_category_chart(result: AnalysisResult, tmpdir: str) -> Chart | None:
-    es = result.extra_summary
-    if es is None or es.empty or not result.extra_metric:
-        return None
-    cat = result.extra_category_col
-    metric = result.extra_metric
-    if cat not in es.columns or metric not in es.columns:
-        return None
-
-    pretty = result.metric_labels.get(metric, metric)
-    chan = result.channel_col if result.channel_col and result.channel_col in es.columns else None
-
-    if chan:
-        pivot = es.pivot_table(index=cat, columns=chan, values=metric, aggfunc="sum", fill_value=0)
-        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
-        fig, ax = plt.subplots(figsize=(max(8, 0.8 * len(pivot.index) + 3), 5))
-        n_cats = len(pivot.index)
-        n_chans = len(pivot.columns)
-        width = 0.8 / max(n_chans, 1)
-        x = np.arange(n_cats)
-        cmap = plt.get_cmap("tab10")
-        for i, c in enumerate(pivot.columns):
-            offset = (i - (n_chans - 1) / 2) * width
-            ax.bar(x + offset, pivot[c].astype(float),
-                   width=width, label=_truncate(c, 20), color=cmap(i % 10))
-        ax.set_xticks(x)
-        ax.set_xticklabels([_truncate(v, 18) for v in pivot.index.astype(str)], rotation=15, ha="right")
-        ax.set_xlabel(str(cat))
-        ax.set_ylabel(pretty)
-        ax.set_title(f"{pretty}: {cat} × Каналы")
-        ax.legend(title="Канал", bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=8)
-        desc = (
-            f"Сравнение значений «{pretty}» по дополнительной категории «{cat}» в разрезе каналов."
-        )
-        chart_title = f"{pretty}: {cat} × Каналы"
-    else:
-        data = es.groupby(cat, dropna=True)[metric].sum().sort_values(ascending=False)
-        fig, ax = plt.subplots(figsize=(max(7, 0.7 * len(data) + 3), 5))
-        ax.bar([_truncate(v, 20) for v in data.index.astype(str)],
-               data.values.astype(float), color="#1c8f9e")
-        ax.set_ylabel(pretty)
-        ax.set_xlabel(str(cat))
-        ax.set_title(f"{pretty} по «{cat}»")
-        plt.xticks(rotation=15, ha="right")
-        desc = f"Суммарное значение «{pretty}» по дополнительной категории «{cat}»."
-        chart_title = f"{pretty} по «{cat}»"
-
-    path = _new_path("extra_cat", tmpdir)
-    _save(fig, path)
-    return Chart(title=chart_title, path=path, description=desc)
-
-
 def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Chart]:
+    """
+    Собирает полный набор графиков для DOCX.
+
+    Важно:
+    - линейные графики строятся только если выбраны и кампании, и каналы;
+    - остальные графики строятся только если есть нужные столбцы/метрики;
+    - никаких падений на отсутствующих полях быть не должно.
+    """
     if tmpdir is None:
         tmpdir = tempfile.mkdtemp(prefix="mkt_charts_")
 
     charts: list[Chart] = []
     labels = result.metric_labels
 
-    # сводный график по показам / кликам / конверсиям
-    funnel = _funnel_chart(result, tmpdir)
-    if funnel:
-        charts.append(funnel)
+    # 1. Линейный по показам / кликам / конверсиям для всех каналов отдельно,
+    #    если выбраны кампании и каналы.
+    line_base = _line_by_campaign_channel(
+        result,
+        metric_cols=["displays", "clicks", "conversions"],
+        title="Линейные графики по показам, кликам и конверсиям",
+        tmpdir=tmpdir,
+    )
+    if line_base:
+        charts.append(line_base)
 
-    combined_funnel_metrics = {
-        c for c in ("displays", "clicks", "conversions")
-        if c in result.metrics.columns and result.metrics[c].notna().any()
-    }
-    has_combined_funnel = len(combined_funnel_metrics) >= 2
+    # 2. Линейный по 4 KPI: CPC / CTR / CVR / CPA,
+    #    если выбраны кампании и каналы.
+    line_kpi = _line_by_campaign_channel(
+        result,
+        metric_cols=["CPC", "CTR", "CVR", "CPA"],
+        title="Линейные графики по KPI: CPC, CTR, CVR, CPA",
+        tmpdir=tmpdir,
+    )
+    if line_kpi:
+        charts.append(line_kpi)
 
-    # ranking bars
+    # 3. Столбчатые диаграммы по базовым метрикам.
     for value_col, color in (
-            ("conversions", "#117733"),
-            ("clicks", "#4477AA"),
-            ("displays", "#88CCEE"),
-            ("total_cost", "#CC6677"),
-            ("CTR", "#882255"),
-            ("CVR", "#AA4499"),
-            ("CPA", "#999933"),
-            ("CPC", "#DDCC77"),
+        ("displays", "#88CCEE"),
+        ("clicks", "#4477AA"),
+        ("conversions", "#117733"),
     ):
-        if has_combined_funnel and value_col in {"displays", "clicks", "conversions"}:
-            continue
-
-        if value_col in result.metrics.columns:
+        if _has_metric(result.metrics, value_col):
             ch = _bar_chart(
                 result,
                 value_col,
@@ -565,36 +688,47 @@ def build_charts(result: AnalysisResult, tmpdir: str | None = None) -> list[Char
             )
             if ch:
                 charts.append(ch)
-        if value_col in result.metrics.columns:
-            ch = _bar_chart(result, value_col,
-                            f"{labels.get(value_col, value_col)} — ранжирование",
-                            labels.get(value_col, value_col), tmpdir, color=color)
+
+    # 4. Столбчатые диаграммы по KPI.
+    for value_col, color in (
+        ("CPC", "#DDCC77"),
+        ("CTR", "#882255"),
+        ("CVR", "#AA4499"),
+        ("CPA", "#999933"),
+    ):
+        if _has_metric(result.metrics, value_col):
+            ch = _bar_chart(
+                result,
+                value_col,
+                f"{labels.get(value_col, value_col)} — ранжирование",
+                labels.get(value_col, value_col),
+                tmpdir,
+                color=color,
+            )
             if ch:
                 charts.append(ch)
 
-    # сравнение долей
+    # 5. Сравнение 3 долей.
     share = _share_chart(result, tmpdir)
     if share:
         charts.append(share)
 
-    # heatmap KPI
-    kpi_cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if c in result.metrics.columns]
+    # 6. Тепловая карта KPI с отклонением от среднего.
+    kpi_cols = [c for c in ("CTR", "CVR", "CPA", "CPC") if _has_metric(result.metrics, c)]
     if len(kpi_cols) >= 2:
-        hm = _heatmap(result, kpi_cols, "Тепловая карта KPI", tmpdir)
+        hm = _heatmap(result, kpi_cols, "Тепловая карта KPI с отклонением от среднего", tmpdir)
         if hm:
             charts.append(hm)
 
-    corr = _correlation_heatmap(result.metrics, labels, tmpdir)
-    if corr:
-        charts.append(corr)
-
-    age = _age_chart(result, tmpdir)
-    if age:
-        charts.append(age)
-
+    # 7. График по доп. столбцу.
     extra = _extra_category_chart(result, tmpdir)
     if extra:
         charts.append(extra)
+
+    # 8. График по возрасту.
+    age = _age_chart(result, tmpdir)
+    if age:
+        charts.append(age)
 
     return charts
 

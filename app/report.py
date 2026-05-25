@@ -1,9 +1,7 @@
 """Генерация отчёта в DOCX.
 
-PDF-экспорт удалён сознательно: качественную конвертацию с поддержкой кириллицы
-и широких таблиц поддерживать слишком хрупко, а плохой PDF — хуже его отсутствия.
-DOCX-отчёт остаётся основным стабильным форматом — его можно при необходимости
-конвертировать в PDF любым внешним инструментом (Word, LibreOffice, Google Docs).
+DOCX — основной стабильный формат отчёта.
+Модуль получает уже построенные графики из app.charts и вставляет их в документ.
 """
 
 from __future__ import annotations
@@ -13,10 +11,10 @@ from datetime import datetime
 import pandas as pd
 
 from docx import Document
-from docx.shared import Inches, Pt, Cm
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Inches, Pt
 
 from app.charts import Chart
 from app.processing import AnalysisResult, format_metrics_for_display
@@ -29,37 +27,68 @@ def _set_cell_bg(cell, color_hex: str) -> None:
     tcPr.append(shd)
 
 
-def _add_dataframe_table(doc, df: pd.DataFrame) -> None:
+def _add_dataframe_table(doc: Document, df: pd.DataFrame) -> None:
     if df is None or df.empty:
         return
+
     table = doc.add_table(rows=1, cols=len(df.columns))
     table.style = "Light Grid Accent 1"
+
     hdr = table.rows[0].cells
     for i, col in enumerate(df.columns):
         hdr[i].text = str(col)
         for paragraph in hdr[i].paragraphs:
             for run in paragraph.runs:
                 run.bold = True
-        _set_cell_bg(hdr[i], "3a6b8a")
+        _set_cell_bg(hdr[i], "3A6B8A")
+
     for _, row in df.iterrows():
         cells = table.add_row().cells
         for i, col in enumerate(df.columns):
             cells[i].text = "" if pd.isna(row[col]) else str(row[col])
 
 
-def _format_extra_summary(result) -> pd.DataFrame:
-    """Форматирует extra_summary для DOCX-таблицы (русские названия, округление)."""
+def _format_extra_summary(result: AnalysisResult) -> pd.DataFrame:
     es = result.extra_summary.copy()
     rename = {}
+
+    if result.extra_category_col and result.extra_category_col in es.columns:
+        rename[result.extra_category_col] = str(result.extra_category_col)
+
     for raw, label in result.metric_labels.items():
         if raw in es.columns:
             rename[raw] = label
+
+    if "cpc_avg" in es.columns and "cpc_avg" not in rename:
+        rename["cpc_avg"] = "Средний CPC (из данных)"
+
     es = es.rename(columns=rename)
-    # округлим числовые колонки
+
     for c in es.columns:
         if pd.api.types.is_numeric_dtype(es[c]):
             es[c] = es[c].round(2)
+
     return es
+
+
+def _normalize_title(text: str) -> str:
+    return " ".join(str(text).strip().lower().replace("ё", "е").split())
+
+
+def _deduplicate_charts(charts: list[Chart]) -> list[Chart]:
+    """Подстраховка: если одинаковый заголовок пришёл дважды, в DOCX вставляем один раз."""
+    unique: list[Chart] = []
+    seen: set[str] = set()
+
+    for ch in charts:
+        if not ch or not ch.title:
+            continue
+        key = _normalize_title(ch.title)
+        if key not in seen:
+            unique.append(ch)
+            seen.add(key)
+
+    return unique
 
 
 def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -> str:
@@ -112,6 +141,8 @@ def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -
         for w in result.warnings:
             doc.add_paragraph(w, style="List Bullet")
 
+    charts = _deduplicate_charts(charts)
+
     if charts:
         doc.add_heading("Графики", level=1)
 
@@ -119,7 +150,10 @@ def export_docx(result: AnalysisResult, charts: list[Chart], output_path: str) -
             if i > 0:
                 doc.add_page_break()
 
-            doc.add_paragraph(ch.title).runs[0].bold = True
+            p = doc.add_paragraph()
+            run = p.add_run(ch.title)
+            run.bold = True
+
             try:
                 doc.add_picture(ch.path, width=Inches(6.3))
             except Exception as e:
