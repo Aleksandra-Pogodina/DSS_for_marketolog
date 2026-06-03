@@ -73,93 +73,112 @@ def _card_frame() -> QFrame:
 
 
 class _KpiCard(QFrame):
-    """KPI-карточка с верхней акцентной полосой и индексом."""
+    """Нестандартная KPI-карточка: асимметричная композиция и угловой маркер."""
 
-    def __init__(self, label: str, value: str, accent: str, index: int):
+    def __init__(self, label: str, value: str, accent: str):
         super().__init__()
         self.setObjectName("KpiCard")
         self._accent = accent
-        self._index = index
 
+        self.setMinimumHeight(126)
         self.setStyleSheet("""
             QFrame#KpiCard {
-                border: 1px solid #D9DEE7;
-                border-radius: 14px;
-                background: #FFFFFF;
+                background: #FCFCFD;
+                border: 1px solid #D9E0E7;
+                border-radius: 18px;
             }
         """)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.top_line = QFrame()
-        self.top_line.setFixedHeight(5)
-        self.top_line.setStyleSheet(
-            f"background: {accent}; border-top-left-radius: 14px; border-top-right-radius: 14px;"
-        )
-        lay.addWidget(self.top_line)
+        shell = QWidget()
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(16, 14, 16, 14)
+        shell_layout.setSpacing(10)
 
-        body = QWidget()
-        body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(16, 14, 16, 14)
-        body_lay.setSpacing(10)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(0)
 
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(8)
-
-        self.label = QLabel(label)
-        self.label.setStyleSheet("""
-            color: #5F6B7A;
-            font-size: 12px;
-            font-weight: 600;
+        self.corner_flag = QLabel()
+        self.corner_flag.setFixedSize(34, 18)
+        self.corner_flag.setStyleSheet(f"""
+            background: {accent};
+            border-top-left-radius: 14px;
+            border-bottom-right-radius: 14px;
+            border-top-right-radius: 4px;
+            border-bottom-left-radius: 4px;
         """)
-        top_row.addWidget(self.label, 1)
+        top.addWidget(self.corner_flag, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        top.addStretch()
 
-        self.index_badge = QLabel(f"{index:02d}")
-        self.index_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.index_badge.setFixedSize(28, 20)
-        self.index_badge.setStyleSheet(f"""
-            background: {accent}22;
-            color: {accent};
-            border: 1px solid {accent}55;
-            border-radius: 10px;
+        shell_layout.addLayout(top)
+
+        middle = QHBoxLayout()
+        middle.setContentsMargins(0, 0, 0, 0)
+        middle.setSpacing(14)
+
+        self.label_block = QLabel(label.upper())
+        self.label_block.setWordWrap(True)
+        self.label_block.setFixedWidth(88)
+        self.label_block.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.label_block.setStyleSheet("""
+            color: #6B7280;
             font-size: 11px;
             font-weight: 700;
+            letter-spacing: 1.1px;
+            line-height: 1.25;
         """)
-        top_row.addWidget(self.index_badge, 0, Qt.AlignmentFlag.AlignTop)
+        middle.addWidget(self.label_block, 0)
 
-        body_lay.addLayout(top_row)
+        value_wrap = QVBoxLayout()
+        value_wrap.setContentsMargins(0, 0, 0, 0)
+        value_wrap.setSpacing(8)
 
         self.value = QLabel(value)
         self.value.setStyleSheet("""
-            color: #18202A;
-            font-size: 28px;
-            font-weight: 750;
-            letter-spacing: 0.2px;
+            color: #111827;
+            font-size: 31px;
+            font-weight: 800;
+            letter-spacing: -0.4px;
+            line-height: 1.0;
         """)
-        body_lay.addWidget(self.value)
+        value_wrap.addWidget(self.value)
 
-        self.underline = QFrame()
-        self.underline.setFixedHeight(1)
-        self.underline.setStyleSheet("background: #EEF2F6; border: none;")
-        body_lay.addWidget(self.underline)
+        self.meta_line = QFrame()
+        self.meta_line.setFixedHeight(2)
+        self.meta_line.setStyleSheet(f"""
+            background: {accent};
+            border-radius: 2px;
+            max-width: 72px;
+        """)
+        value_wrap.addWidget(self.meta_line, 0, Qt.AlignmentFlag.AlignLeft)
 
-        lay.addWidget(body)
+        value_wrap.addStretch()
+        middle.addLayout(value_wrap, 1)
+
+        shell_layout.addLayout(middle)
+        shell_layout.addStretch()
+
+        root.addWidget(shell)
 
     def apply_palette(self, accent: str, bg: str | None = None, fg: str | None = None) -> None:
         self._accent = accent
-        self.top_line.setStyleSheet(
-            f"background: {accent}; border-top-left-radius: 14px; border-top-right-radius: 14px;"
-        )
-        self.index_badge.setStyleSheet(f"""
-            background: {accent}22;
-            color: {accent};
-            border: 1px solid {accent}55;
-            border-radius: 10px;
-            font-size: 11px;
-            font-weight: 700;
+
+        self.corner_flag.setStyleSheet(f"""
+            background: {accent};
+            border-top-left-radius: 14px;
+            border-bottom-right-radius: 14px;
+            border-top-right-radius: 4px;
+            border-bottom-left-radius: 4px;
+        """)
+
+        self.meta_line.setStyleSheet(f"""
+            background: {accent};
+            border-radius: 2px;
+            max-width: 72px;
         """)
 
 
@@ -236,27 +255,26 @@ class ResultsWindow(QWidget):
         add_sum("Клики", "clicks")
         add_sum("Конверсии", "conversions")
         add_sum("Затраты", "total_cost")
-        add_avg_pct("Ср. CTR", "CTR")
-        add_avg_pct("Ср. CVR", "CVR")
+        add_avg_pct("CTR", "CTR")
+        add_avg_pct("CVR", "CVR")
 
         accents = [
-            "#2F80ED",  # синий
-            "#27AE60",  # зелёный
-            "#9B51E0",  # фиолетовый
-            "#F2994A",  # оранжевый
-            "#E05A33",  # терракотовый
-            "#14B8A6",  # бирюзовый
+            "#2563EB",  # синий
+            "#0F9D58",  # зелёный
+            "#C2410C",  # терракотовый
+            "#7C3AED",  # фиолетовый
+            "#D97706",  # янтарный
+            "#0F766E",  # тёмная бирюза
         ]
 
         row = QHBoxLayout()
-        row.setSpacing(12)
+        row.setSpacing(14)
 
         self._kpi_cards.clear()
 
         for i, (label, value) in enumerate(cards_data):
             accent = accents[i % len(accents)]
-            card = _KpiCard(label, value, accent, i + 1)
-            card.setMinimumHeight(118)
+            card = _KpiCard(label, value, accent)
             card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             row.addWidget(card, 1)
             self._kpi_cards.append(card)
