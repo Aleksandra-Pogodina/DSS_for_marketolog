@@ -73,35 +73,94 @@ def _card_frame() -> QFrame:
 
 
 class _KpiCard(QFrame):
-    """KPI-карточка с подписью и значением. Цвета подстраиваются под текущую тему."""
+    """KPI-карточка с верхней акцентной полосой и индексом."""
 
-    def __init__(self, label: str, value: str, bg: str, fg: str):
+    def __init__(self, label: str, value: str, accent: str, index: int):
         super().__init__()
         self.setObjectName("KpiCard")
-        self._bg = bg
-        self._fg = fg
-        self.setStyleSheet(
-            f"QFrame#KpiCard {{ background: {bg}; border: 1px solid {bg}; border-radius: 10px; }}"
-        )
+        self._accent = accent
+        self._index = index
+
+        self.setStyleSheet("""
+            QFrame#KpiCard {
+                border: 1px solid #D9DEE7;
+                border-radius: 14px;
+                background: #FFFFFF;
+            }
+        """)
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(2)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self.top_line = QFrame()
+        self.top_line.setFixedHeight(5)
+        self.top_line.setStyleSheet(
+            f"background: {accent}; border-top-left-radius: 14px; border-top-right-radius: 14px;"
+        )
+        lay.addWidget(self.top_line)
+
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(16, 14, 16, 14)
+        body_lay.setSpacing(10)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
 
         self.label = QLabel(label)
-        self.label.setStyleSheet(f"color: {fg}; font-weight: 600; font-size: 12px;")
+        self.label.setStyleSheet("""
+            color: #5F6B7A;
+            font-size: 12px;
+            font-weight: 600;
+        """)
+        top_row.addWidget(self.label, 1)
+
+        self.index_badge = QLabel(f"{index:02d}")
+        self.index_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.index_badge.setFixedSize(28, 20)
+        self.index_badge.setStyleSheet(f"""
+            background: {accent}22;
+            color: {accent};
+            border: 1px solid {accent}55;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+        """)
+        top_row.addWidget(self.index_badge, 0, Qt.AlignmentFlag.AlignTop)
+
+        body_lay.addLayout(top_row)
+
         self.value = QLabel(value)
-        self.value.setStyleSheet(f"color: {fg}; font-size: 22px; font-weight: 700;")
+        self.value.setStyleSheet("""
+            color: #18202A;
+            font-size: 28px;
+            font-weight: 750;
+            letter-spacing: 0.2px;
+        """)
+        body_lay.addWidget(self.value)
 
-        lay.addWidget(self.label)
-        lay.addWidget(self.value)
+        self.underline = QFrame()
+        self.underline.setFixedHeight(1)
+        self.underline.setStyleSheet("background: #EEF2F6; border: none;")
+        body_lay.addWidget(self.underline)
 
-    def apply_palette(self, bg: str, fg: str) -> None:
-        self._bg, self._fg = bg, fg
-        self.setStyleSheet(
-            f"QFrame#KpiCard {{ background: {bg}; border: 1px solid {bg}; border-radius: 10px; }}"
+        lay.addWidget(body)
+
+    def apply_palette(self, accent: str, bg: str | None = None, fg: str | None = None) -> None:
+        self._accent = accent
+        self.top_line.setStyleSheet(
+            f"background: {accent}; border-top-left-radius: 14px; border-top-right-radius: 14px;"
         )
-        self.label.setStyleSheet(f"color: {fg}; font-weight: 600; font-size: 12px;")
-        self.value.setStyleSheet(f"color: {fg}; font-size: 22px; font-weight: 700;")
+        self.index_badge.setStyleSheet(f"""
+            background: {accent}22;
+            color: {accent};
+            border: 1px solid {accent}55;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+        """)
 
 
 class ResultsWindow(QWidget):
@@ -169,27 +228,39 @@ class ResultsWindow(QWidget):
             if col in m.columns and m[col].notna().any():
                 cards_data.append((label, _format_compact(m[col].sum(skipna=True))))
 
-        add_sum("Показы", "displays")
-        add_sum("Клики", "clicks")
-        add_sum("Конверсии", "conversions")
-        add_sum("Затраты", "total_cost")
-
         def add_avg_pct(label: str, col: str) -> None:
             if col in m.columns and m[col].notna().any():
                 cards_data.append((label, f"{m[col].mean(skipna=True):.2f}%"))
 
+        add_sum("Показы", "displays")
+        add_sum("Клики", "clicks")
+        add_sum("Конверсии", "conversions")
+        add_sum("Затраты", "total_cost")
         add_avg_pct("Ср. CTR", "CTR")
         add_avg_pct("Ср. CVR", "CVR")
 
+        accents = [
+            "#2F80ED",  # синий
+            "#27AE60",  # зелёный
+            "#9B51E0",  # фиолетовый
+            "#F2994A",  # оранжевый
+            "#E05A33",  # терракотовый
+            "#14B8A6",  # бирюзовый
+        ]
+
         row = QHBoxLayout()
         row.setSpacing(12)
-        palette = get_palette().kpi
+
+        self._kpi_cards.clear()
+
         for i, (label, value) in enumerate(cards_data):
-            bg, fg = palette[i % len(palette)]
-            card = _KpiCard(label, value, bg, fg)
+            accent = accents[i % len(accents)]
+            card = _KpiCard(label, value, accent, i + 1)
+            card.setMinimumHeight(118)
             card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             row.addWidget(card, 1)
             self._kpi_cards.append(card)
+
         return row
 
     # ---------- вкладки -----------------------------------------------------
@@ -744,10 +815,9 @@ class ResultsWindow(QWidget):
 
     def on_theme_changed(self) -> None:
         """Перерисовать KPI-карточки и пересоздать Plotly-страницы под новую тему."""
-        pal_kpi = get_palette().kpi
+        accents = ["#2F80ED", "#27AE60", "#9B51E0", "#F2994A", "#E05A33", "#14B8A6"]
         for i, card in enumerate(self._kpi_cards):
-            bg, fg = pal_kpi[i % len(pal_kpi)]
-            card.apply_palette(bg, fg)
+            card.apply_palette(accents[i % len(accents)])
 
         # Перезаливаем фон у созданных WebEngineView; HTML страницы прозрачные,
         # так что менять контент не нужно — достаточно подложки.
